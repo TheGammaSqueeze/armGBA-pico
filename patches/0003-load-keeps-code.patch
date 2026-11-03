@@ -1,0 +1,57 @@
+armGBA-pico patch to upstream armGBA (src/state.c), MPL-2.0 like the file it changes.
+Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
+
+--- a/src/state.c
++++ b/src/state.c
+@@ -11,6 +11,7 @@
+ 
+ #include "gba.h"
+ #include "cpu/jit-internal.h"
++#include "cpu/jit.h"
+ 
+ #include <stdlib.h>
+ #include <string.h>
+@@ -219,7 +220,19 @@
+ 	if ((saved->romSize != gba->romSize && !gba->cart.multi) || saved->multibootSize != gba->multibootSize) {
+ 		return false;
+ 	}
++#ifdef ARMGBA_HOST_LOAD_KEEPS_CODE
++	// Only what compiled code has built in throws it all away: code running from VRAM, and the wait
++	// states. Work RAM words the load changes are handled one by one below, as stores to them are
++	// (armGBA-pico: run ahead loads a state every frame, and a game with code in IWRAM that it
++	// rewrites otherwise lost all its compiled code each time, then recompiled it).
++	bool flush = gba->videoCode || gba->prefetchEnabled != saved->prefetchEnabled ||
++	             memcmp(gba->waitN16, saved->waitN16, sizeof(gba->waitN16)) ||
++	             memcmp(gba->waitS16, saved->waitS16, sizeof(gba->waitS16)) ||
++	             memcmp(gba->waitN32, saved->waitN32, sizeof(gba->waitN32)) ||
++	             memcmp(gba->waitS32, saved->waitS32, sizeof(gba->waitS32));
++#else
+ 	bool flush = codeChanged(gba, saved);
++#endif
+ 	struct GBA* host = malloc(sizeof(*host));
+ 	if (!host) {
+ 		return false;
+@@ -288,6 +301,23 @@
+ 		link = &(*link)->next;
+ 	}
+ 	timingResetNextEvent(gba);
++#ifdef ARMGBA_HOST_LOAD_KEEPS_CODE
++	if (!flush && gba->jit) {
++		// Each word compiled code was made from that the load gives another value goes through
++		// what a store to it does: kept when only an operand the code reads from memory changed,
++		// otherwise the blocks made from it are removed.
++		for (uint32_t word = 0; word < SIZE_IWRAM / 4; ++word) {
++			if (gba->iwramCode[word] && memcmp(&host->iwram[word * 4], &gba->iwram[word * 4], 4)) {
++				jitCodeWritten(gba, 0x03000000u + word * 4, 4);
++			}
++		}
++		for (uint32_t word = 0; word < SIZE_EWRAM / 4; ++word) {
++			if (gba->ewramCode[word] && memcmp(&host->ewram[word * 4], &gba->ewram[word * 4], 4)) {
++				jitCodeWritten(gba, 0x02000000u + word * 4, 4);
++			}
++		}
++	}
++#endif
+ 	free(host);
+ 
+ 	jitStateLoaded(gba, flush);

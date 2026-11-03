@@ -1,0 +1,29 @@
+armGBA-pico patch to upstream armGBA (src/gba.c), MPL-2.0 like the file it changes.
+Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
+
+diff --git a/src/gba.c b/src/gba.c
+index febe5fc..b492598 100644
+--- a/src/gba.c
++++ b/src/gba.c
+@@ -229,11 +229,21 @@ bool gbaLoadRom(struct GBA* gba, const void* data, size_t size) {
+ 		size = 0;
+ 	}
+ 	// The full 32 MiB is mapped, so out-of-range reads can't leave the buffer.
++#ifdef ARMGBA_HOST_ROM_BUFFER
++	// A host that has already loaded the image into a SIZE_ROM buffer of its own hands that buffer
++	// over instead of a copy (armGBA-pico: the bootloader's arena has no room for two).
++	extern uint8_t* armgbaHostRomBuffer(const void* data, size_t size);
++	gba->rom = armgbaHostRomBuffer(data, size);
++	if (!gba->rom) {
++		return false;
++	}
++#else
+ 	gba->rom = calloc(1, SIZE_ROM);
+ 	if (!gba->rom) {
+ 		return false;
+ 	}
+ 	memcpy(gba->rom, data, size);
++#endif
+ 	// A Classic NES Series cartridge repeats its 1 MiB all through the cartridge space; the games
+ 	// read it there, and drop button presses without it.
+ 	if (size >= 0xB0 && gba->rom[0xAC] == 'F' && !(size & (size - 1))) {
