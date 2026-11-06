@@ -61,7 +61,29 @@ static const struct gba_core_imports s_imports = { audio_submit, host_time, yiel
 
 static void *cpu_thread(void *arg) { (void) arg; sem_wait(&s_cpu); g->cpu_loop(); return NULL; }
 
-static void run_frame(void) { g->pre_frame(); sem_post(&s_cpu); sem_wait(&s_main); g->post_frame(); }
+/* HARNESS_KEYS="first-last:mask,...": the GBA key mask (bit 0 A, 1 B, 2 Select, 3 Start, 4 Right,
+ * 5 Left, 6 Up, 7 Down, 8 R, 9 L) held over frames first..last, counted from the first frame run */
+static int s_frame_no;
+static unsigned keys_for(int frame)
+{
+	const char *k = getenv("HARNESS_KEYS");
+	unsigned m = 0;
+	while (k && *k) {
+		int a = (int) strtol(k, (char **) &k, 10), b = a;
+		if (*k == '-') b = (int) strtol(k + 1, (char **) &k, 10);
+		if (*k == ':') { unsigned v = (unsigned) strtoul(k + 1, (char **) &k, 0); if (frame >= a && frame <= b) m |= v; }
+		while (*k && *k != ',') k++;
+		if (*k == ',') k++;
+	}
+	return m;
+}
+
+static void run_frame(void)
+{
+	if (g->set_keys) g->set_keys(keys_for(s_frame_no));
+	s_frame_no++;
+	g->pre_frame(); sem_post(&s_cpu); sem_wait(&s_main); g->post_frame();
+}
 
 static unsigned hash_screen(void)
 {
@@ -130,6 +152,16 @@ int main(int argc, char **argv)
 	if (romsz > g->rom_capacity()) romsz = g->rom_capacity();
 	memcpy(g->rom_ptr(), rom, romsz);
 	if (g->core_start((unsigned) romsz, bios) != 0) { fprintf(stderr, "core_start failed\n"); return 1; }
+	{	/* HARNESS_SAV=file: the battery save, put into the save buffer after core_start as the LK does */
+		const char *sv = getenv("HARNESS_SAV");
+		if (sv) {
+			size_t n;
+			unsigned char *b = slurp(sv, &n);
+			if (n > g->backup_size()) n = g->backup_size();
+			memcpy(g->backup_ptr(), b, n);
+			printf("save loaded: %s (%zu bytes)\n", sv, n);
+		}
+	}
 	printf("started: rom %zu bytes, state %u bytes, save buffer %u bytes, heap %u KiB\n", romsz, g->state_size(), g->backup_size(),
 	       g->version >= 3 && g->heap_used ? g->heap_used() / 1024u : 0);
 
@@ -235,10 +267,22 @@ int main(int argc, char **argv)
 		int k = e ? atoi(e) : 0;
 		if (k > 1 && 60 % k) { fprintf(stderr, "HARNESS_SKIP must divide 60\n"); return 2; }
 		if (k > 1) printf("render skip: drawing 1 frame in %d\n", k);
+		const char *shots = getenv("HARNESS_SHOTS");   /* frame numbers to write as <out>_<n>.ppm */
 		for (int i = 0; i < frames; i++) {
 			if (k > 1 && g->skip_next_frame) *g->skip_next_frame = (i % k) != k - 1;
 			run_frame();
 			if ((i + 1) % 60 == 0) printf("frame %d hash %08x audio %llu\n", i + 1, hash_screen(), s_audio_frames);
+			if (shots && atoi(shots) == i + 1) {
+				char nb[256];
+				snprintf(nb, sizeof nb, "%s_%d.ppm", argc > 5 ? argv[5] : "shot", i + 1);
+				write_ppm(nb);
+				shots = strchr(shots, ',');
+				if (shots) shots++;
+			}
+		}
+		{	/* HARNESS_SAVOUT=file: the save buffer as the LK would write it to the card */
+			const char *so = getenv("HARNESS_SAVOUT");
+			if (so) { FILE *f = fopen(so, "wb"); fwrite(g->backup_ptr(), 1, g->backup_size(), f); fclose(f); }
 		}
 		if (g->skip_next_frame) *g->skip_next_frame = 0;
 	}

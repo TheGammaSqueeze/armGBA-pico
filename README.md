@@ -61,9 +61,10 @@ and the complete source the blob was built from.
 
 | Patch | Why |
 | --- | --- |
-| `0001-host-rom-buffer.patch` | `gbaLoadRom` normally copies the image into a 32 MiB buffer of its own. Built with `ARMGBA_HOST_ROM_BUFFER`, it uses the buffer the host has already loaded the image into. The bootloader's 62 MiB arena has no room for two 32 MiB ROM buffers next to the recompiler's 16 MiB of code. Without the define, upstream's code is unchanged. |
+| `0001-host-rom-buffer.patch` | `gbaLoadRom` normally copies the image into a 32 MiB buffer of its own. Built with `ARMGBA_HOST_ROM_BUFFER`, it uses the buffer the host has already loaded the image into. The bootloader's 62 MiB arena has no room for two 32 MiB ROM buffers next to the recompiler's 16 MiB of code. That buffer stays the host's: loading the next game never frees it, and `gbaMapRom` (mapping an image from its file) is left out, since the bootloader has no files to map. Without the define, upstream's code is unchanged. |
 | `0002-host-render-skip.patch` | Built with `ARMGBA_HOST_RENDER_SKIP`, `renderScanline` leaves the drawing out while the host's `armgbaRenderSkip` is set, keeping all of its per line bookkeeping: a line that changed stays dirty, so the next frame drawn redraws it, and a line that did not change keeps its pixels as it always does. The flag is a global, not part of `struct GBA`, so save states are unchanged. Without the define, upstream's code is unchanged. |
 | `0003-load-keeps-code.patch` | Built with `ARMGBA_HOST_LOAD_KEEPS_CODE`, loading a state no longer throws all compiled code away when a work RAM word it was compiled from changed. Each such word goes through what a store to it does (kept when only an operand the code reads from memory changed, else the blocks compiled from it are removed); code in VRAM and changed wait states still flush everything. Run ahead loads a state every frame: in Mario & Luigi 1183 of 1200 loads flushed all the code, and the recompiling made the frame times uneven enough to starve the audio (skips). Under the harness the same 1200 frames with run ahead 3 took 9.4 s instead of 109.5 s, with the same pictures and sound as without run ahead. Without the define, upstream's code is unchanged. |
+| `0004-sram-patched-eeprom.patch` | Images made for reproduction cartridges, which have SRAM where the original has an EEPROM, rewrite the save library's EEPROM block read and write as copies to and from SRAM. Upstream's override list gives Super Mario Advance 2 and 3 an EEPROM, so with such an image their saves went nowhere (Super Mario Advance 3 stopped on "Your saved data is corrupted."). An EEPROM the list forces now becomes SRAM when the image holds that rewritten copy. Sent upstream as a pull request; it goes once upstream has it. |
 
 ## Building
 
@@ -93,7 +94,7 @@ the flags, e.g. `TUNE=cortex-a76 ./build.sh`. Releases use the defaults.
 `.github/workflows/build.yml` builds the blob on Ubuntu 22.04 (its `gcc-arm-none-eabi` is the
 10.3-2021.07 toolchain the blob is developed with) for every push and pull request, builds the
 harness, and keeps the packaged result as a workflow artifact. Pushing a tag named `v*` (for
-example `git tag v1.3.1-pico1 && git push origin v1.3.1-pico1`) also publishes a GitHub release
+example `git tag v1.4-pico1 && git push origin v1.4-pico1`) also publishes a GitHub release
 with:
 
 - `armgba-pico-<version>.zip`: `cores/armgba-pico.blob` (copy the `cores` folder to the root of the

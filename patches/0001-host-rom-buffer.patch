@@ -2,10 +2,31 @@ armGBA-pico patch to upstream armGBA (src/gba.c), MPL-2.0 like the file it chang
 Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
 
 diff --git a/src/gba.c b/src/gba.c
-index febe5fc..b492598 100644
 --- a/src/gba.c
 +++ b/src/gba.c
-@@ -229,11 +229,21 @@ bool gbaLoadRom(struct GBA* gba, const void* data, size_t size) {
+@@ -133,6 +133,13 @@
+ 	return gba;
+ }
+ 
++#ifdef ARMGBA_HOST_ROM_BUFFER
++// The cartridge space is the host's own buffer (see gbaLoadRom), which it keeps across games: never
++// freed here. Nothing is mapped from files (armGBA-pico: the bootloader has no files to map).
++static void romFree(uint8_t* rom) {
++	(void) rom;
++}
++#else
+ // Cartridges mapped from their files (gbaMapRom), which the host can drop from memory and read
+ // again as the game needs them.
+ static uint8_t* mappedRoms[8];
+@@ -147,6 +154,7 @@
+ 	}
+ 	free(rom);
+ }
++#endif
+ 
+ void gbaDestroy(struct GBA* gba) {
+ 	renderThreadStop(gba);
+@@ -251,11 +259,21 @@
  		size = 0;
  	}
  	// The full 32 MiB is mapped, so out-of-range reads can't leave the buffer.
@@ -27,3 +48,26 @@ index febe5fc..b492598 100644
  	// A Classic NES Series cartridge repeats its 1 MiB all through the cartridge space; the games
  	// read it there, and drop button presses without it.
  	if (size >= 0xB0 && gba->rom[0xAC] == 'F' && !(size & (size - 1))) {
+@@ -269,6 +287,14 @@
+ 	return true;
+ }
+ 
++#ifdef ARMGBA_HOST_ROM_BUFFER
++// No files to map: the host always loads the image itself (gbaLoadRom).
++bool gbaMapRom(struct GBA* gba, const char* path) {
++	(void) gba;
++	(void) path;
++	return false;
++}
++#else
+ // As gbaLoadRom, with the file mapped over the cartridge space instead of copied in. Returns false,
+ // for gbaLoadRom to copy it, if the file can't be mapped or is one gbaLoadRom changes.
+ bool gbaMapRom(struct GBA* gba, const char* path) {
+@@ -319,6 +345,7 @@
+ 	gba->romMask = toPow2(size) - 1;
+ 	return true;
+ }
++#endif
+ 
+ // Powers on. With skipBios, the machine starts as the BIOS would have left it, at the cartridge's
+ // entry point; otherwise at the BIOS's reset vector.
