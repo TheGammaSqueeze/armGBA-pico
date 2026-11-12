@@ -1,0 +1,32 @@
+armGBA-pico patch to upstream armGBA (src/state.c), MPL-2.0 like the file it changes.
+Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
+
+--- a/src/state.c
++++ b/src/state.c
+@@ -233,7 +233,16 @@
+ #else
+ 	bool flush = codeChanged(gba, saved);
+ #endif
++#ifdef ARMGBA_HOST_LOAD_COPY
++	// A host that loads a state every frame (run ahead, rewind) keeps one buffer for this copy of
++	// the machine, made while its heap was whole (armGBA-pico: in the bootloader's heap, which the
++	// recompiler's churn breaks into pieces, a fresh one could find no room after a while, and
++	// every load after that was refused: the look-ahead frames stayed and the game ran double).
++	extern struct GBA* armgbaHostLoadCopy(void);
++	struct GBA* host = armgbaHostLoadCopy();
++#else
+ 	struct GBA* host = malloc(sizeof(*host));
++#endif
+ 	if (!host) {
+ 		return false;
+ 	}
+@@ -318,7 +327,9 @@
+ 		}
+ 	}
+ #endif
++#ifndef ARMGBA_HOST_LOAD_COPY
+ 	free(host);
++#endif
+ 
+ 	jitStateLoaded(gba, flush);
+ 	cartRestore(gba);

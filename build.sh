@@ -49,7 +49,7 @@ TUNE=${TUNE:-cortex-a55}
 ARCH="-march=armv8-a+simd -mtune=$TUNE -marm -mfpu=neon-fp-armv8 -mfloat-abi=softfp"
 CFLAGS="$ARCH -std=gnu11 ${OPT:--O3} -flto -ffunction-sections -fdata-sections -fno-common \
 	${EXTRA_CFLAGS:-} -Wall -Wno-unused-parameter -Wno-unused-function \
-	-DARMGBA_HOST_ROM_BUFFER -DARMGBA_HOST_RENDER_SKIP -DARMGBA_HOST_LOAD_KEEPS_CODE -I$ROOT/pico/include -I$ROOT/pico -I$OUT/src -I$OUT \
+	-DARMGBA_HOST_ROM_BUFFER -DARMGBA_HOST_RENDER_SKIP -DARMGBA_HOST_LOAD_KEEPS_CODE -DARMGBA_HOST_LOAD_COPY -DARMGBA_HOST_CODE_MIB=24 -I$ROOT/pico/include -I$ROOT/pico -I$OUT/src -I$OUT \
 	-include $ROOT/pico/include/pico_time.h"
 
 # armGBA's core sources (upstream CMakeLists.txt CORE_SOURCES) with the 32 bit ARM backend and

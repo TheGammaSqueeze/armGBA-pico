@@ -51,6 +51,7 @@ static uint8_t *s_base, *s_top, *s_end;
 static struct hdr *s_small[NCLASS + 1];
 static struct hdr *s_large;               /* address ordered */
 static size_t s_peak;
+static size_t s_small_free;   /* the free blocks on the small lists, in bytes (free, though only their own size can have them) */
 
 void pico_heap_init(void *base, size_t size)
 {
@@ -60,6 +61,7 @@ void pico_heap_init(void *base, size_t size)
 	memset(s_small, 0, sizeof s_small);
 	s_large = NULL;
 	s_peak = 0;
+	s_small_free = 0;
 }
 size_t pico_heap_used(void) { return (size_t) (s_top - s_base); }
 size_t pico_heap_peak(void) { return s_peak; }
@@ -84,10 +86,13 @@ static struct hdr *carve(size_t cap)
 static struct hdr *large_take(size_t cap)
 {
 	struct hdr **pp = &s_large, *h;
+	/* a small request (only after its class and the top are out, see malloc) splits off as little
+	 * as a large one would leave whole */
+	size_t keep = cap <= SMALL_MAX ? HDR + ALIGN : HDR + SMALL_MAX;
 	for (; (h = *pp) != NULL; pp = &h->next) {
 		if (h->size < cap) continue;
 		*pp = h->next;
-		if (h->size >= cap + HDR + SMALL_MAX) {   /* split off the tail as a new free block */
+		if (h->size >= cap + keep) {   /* split off the tail as a new free block */
 			struct hdr *t = (struct hdr *) ((uint8_t *) h + HDR + cap);
 			t->size = h->size - (uint32_t) cap - HDR;
 			t->magic = MAGIC_FREE;
@@ -126,18 +131,90 @@ static void large_give(struct hdr *h)
 	}
 }
 
+/* a list of blocks in address order (merge sort: no room is needed, n log n steps) */
+static struct hdr *by_address(struct hdr *h)
+{
+	struct hdr *a, *b, *slow, *fast, *out = NULL, **t = &out;
+	if (!h || !h->next) return h;
+	for (slow = h, fast = h->next; fast && fast->next; fast = fast->next->next) slow = slow->next;
+	b = slow->next; slow->next = NULL; a = h;
+	a = by_address(a); b = by_address(b);
+	while (a && b) {
+		if (a < b) { *t = a; a = a->next; } else { *t = b; b = b->next; }
+		t = &(*t)->next;
+	}
+	*t = a ? a : b;
+	return out;
+}
+
+/* Every block on the small lists back to the address ordered list, merged with its free neighbours
+ * (and a free run at the top goes back to the bump pointer). A small list only serves its own size,
+ * so the recompiler, which allocates and frees small blocks of every size as it compiles and throws
+ * code away, leaves memory there that nothing else can use. The blocks are sorted and the two lists
+ * merged in one walk: putting them in one at a time walked the list for each (seconds, with the
+ * thousands the recompiler leaves). */
+void pico_heap_reclaim(void)
+{
+	struct hdr *all = NULL, **t = &all, *a, *b, *x, *last = NULL, *prev = NULL;
+	unsigned c;
+	for (c = 1; c <= NCLASS; c++) {
+		*t = s_small[c];
+		while (*t) t = &(*t)->next;
+		s_small[c] = NULL;
+	}
+	s_small_free = 0;
+	a = by_address(all);
+	b = s_large;
+	s_large = NULL;
+	while (a || b) {
+		if (!b || (a && a < b)) { x = a; a = a->next; } else { x = b; b = b->next; }
+		x->magic = MAGIC_FREE;
+		x->next = NULL;
+		if (last && (uint8_t *) last + HDR + last->size == (uint8_t *) x) {
+			last->size += HDR + x->size;
+			continue;
+		}
+		if (last) last->next = x; else s_large = x;
+		prev = last;
+		last = x;
+	}
+	if (last && (uint8_t *) last + HDR + last->size == s_top) {   /* the top run: back to the bump pointer */
+		if (prev) prev->next = NULL; else s_large = NULL;
+		s_top = (uint8_t *) last;
+	}
+}
+/* what is still to be had: the space above the top, the free blocks on the address ordered list and
+ * those on the small lists (pico_heap_reclaim makes the last ones fit any size) */
+size_t pico_heap_avail(void)
+{
+	size_t n = (size_t) (s_end - s_top) + s_small_free;
+	struct hdr *h;
+	for (h = s_large; h; h = h->next) n += h->size;
+	return n;
+}
+
+static struct hdr *take(size_t cap)
+{
+	struct hdr *h;
+	if (cap <= SMALL_MAX) {
+		unsigned c = (unsigned) (cap / ALIGN);
+		if ((h = s_small[c]) != NULL) { s_small[c] = h->next; s_small_free -= h->size; return h; }
+		if ((h = carve(cap)) != NULL) return h;
+		return large_take(cap);
+	}
+	if ((h = large_take(cap)) != NULL) return h;
+	return carve(cap);
+}
+
 void *malloc(size_t n)
 {
 	size_t cap = (n + ALIGN - 1) & ~(size_t) (ALIGN - 1);
 	struct hdr *h;
 	if (!cap) cap = ALIGN;
-	if (cap <= SMALL_MAX) {
-		unsigned c = (unsigned) (cap / ALIGN);
-		if ((h = s_small[c]) != NULL) s_small[c] = h->next;
-		else h = carve(cap);
-	} else {
-		h = large_take(cap);
-		if (!h) h = carve(cap);
+	h = take(cap);
+	if (!h) {	/* no room as the lists stand: merge what the small lists hold, and look again */
+		pico_heap_reclaim();
+		h = take(cap);
 	}
 	if (!h) { errno = ENOMEM; return NULL; }
 	h->magic = MAGIC_USED;
@@ -156,6 +233,7 @@ void free(void *p)
 		h->magic = MAGIC_FREE;
 		h->next = s_small[c];
 		s_small[c] = h;
+		s_small_free += h->size;
 	} else {
 		large_give(h);
 	}

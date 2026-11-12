@@ -34,6 +34,8 @@
 #include <string.h>
 
 #include "gba.h"
+#include "cpu/jit.h"
+#include "cpu/jit-internal.h"
 #include "gba_core_abi.h"
 #include "pico_lcd.h"
 
@@ -41,6 +43,7 @@
 
 void pico_heap_init(void *base, size_t size);
 size_t pico_heap_used(void);
+size_t pico_heap_size(void);
 void *malloc(size_t n);
 
 static const struct gba_core_imports *s_imp;
@@ -107,6 +110,14 @@ uint8_t *armgbaHostRomBuffer(const void *data, size_t size)
 	return s_rom;
 }
 
+/* patches/0005: a state load keeps the running machine aside while it puts the saved one in place.
+ * Run ahead and rewind load one every frame, and a fresh copy each time came, after a while, to find
+ * no room in a heap the recompiler keeps cutting up: every load was then refused, the look-ahead
+ * frames stayed, and the game ran at twice its speed. One copy, made at the core's start on the
+ * whole heap, serves them all. */
+static struct GBA *s_load_copy;
+struct GBA *armgbaHostLoadCopy(void) { return s_load_copy; }
+
 /* ---- the table ---------------------------------------------------------------------------------- */
 
 static int core_init(void *arena, unsigned size)
@@ -115,10 +126,12 @@ static int core_init(void *arena, unsigned size)
 	s_gba = NULL;
 	s_rom = malloc(SIZE_ROM);
 	s_scratch_size = 4u << 20;
-	s_scratch = malloc(s_scratch_size);
-	if (!s_rom || !s_scratch) return -1;
+	s_scratch = NULL;   /* made when first asked for (scratch_ptr): the card build never asks */
+	if (!s_rom) return -1;
 	s_gba = gbaCreate();
 	if (!s_gba) return -1;
+	s_load_copy = malloc(sizeof(*s_load_copy));
+	if (!s_load_copy) return -1;
 	/* the LK takes RGB565 frames; armGBA draws BGR555 unless told (upstream libretro.c does the same) */
 	s_gba->renderer.rgb565 = true;
 	s_shown_frame = 0xFFFFFFFFu;
@@ -173,11 +186,33 @@ static void pre_frame(void)
 	}
 }
 
+/* For the LK's oem memstage (the core sits at a fixed address, see armgba-pico.map): how its heap
+ * and its recompiler stand, brought up to date every 64 frames. */
+size_t pico_heap_avail(void);
+void pico_heap_reclaim(void);
+static unsigned s_load_n, s_low_flushes;   /* state loads, and the code flushes the heap guard made (below) */
+volatile uint32_t armgba_pico_stats[8] = { 0x53544154u };   /* "STAT", then the figures below */
+static void stats_update(void)
+{
+	static unsigned n;
+	if (++n & 63u) return;
+	armgba_pico_stats[1] = (uint32_t) pico_heap_avail();
+	armgba_pico_stats[2] = (uint32_t) pico_heap_size();
+	armgba_pico_stats[3] = s_low_flushes;
+	if (s_gba->jit) {
+		struct Jit *jit = s_gba->jit;
+		armgba_pico_stats[4] = (uint32_t) jit->flushes;
+		armgba_pico_stats[5] = (uint32_t) (jit->codeNext - jit->codeStart);
+		armgba_pico_stats[6] = (uint32_t) jit->compiled;
+	}
+	armgba_pico_stats[7] = s_load_n;
+}
 static void post_frame(void)
 {
 	struct Audio *a;
 	unsigned n;
 	if (!s_gba) return;
+	stats_update();
 	a = &s_gba->audio;
 	n = a->outCount;
 	a->outCount = 0;
@@ -247,10 +282,28 @@ static void screen_fill(unsigned short v)
 
 static unsigned state_size(void) { return (unsigned) gbaStateSize(); }
 static void state_save(void *buf) { if (s_gba) gbaSaveState(s_gba, buf); }
+/* The recompiler keeps what it learns about each block it compiles on the heap, and only lets it go
+ * when its code buffer fills. Upstream, made for a desktop, does not look at what an allocation
+ * returns, so a heap that runs out is a silent hang: in the LK's old 62 MiB arena, which held the
+ * ROM, that buffer and the machine with a few MiB to spare, Super Mario Advance 3 in fast forward
+ * ran it out. The LK now gives the core a window of 128 MiB, and this stays as the safety net: the
+ * code is thrown away early, once less than this is left. It is done right after a state is loaded:
+ * the LK starts the emulation afresh after every load (as it must when a load throws the code away),
+ * and it loads one now and then when the heap looks full even with no run ahead or rewind doing so. */
+#define HEAP_LOW (2u << 20)
+static void heap_guard(void)
+{
+	if ((++s_load_n & 15u) && pico_heap_used() + HEAP_LOW < pico_heap_size()) return;   /* now and then, or near the top */
+	if (pico_heap_avail() >= HEAP_LOW) return;
+	jitFlush(s_gba);
+	pico_heap_reclaim();   /* what the flush freed, merged into blocks any size can use */
+	s_low_flushes++;
+}
 static void state_load(const void *buf)
 {
 	if (!s_gba) return;
 	gbaLoadState(s_gba, buf, gbaStateSize());
+	heap_guard();
 	/* A state loaded by the user (Load State, resume) is drawn again in full on its first frame,
 	 * so the picture never depends on the kept pixels in the state: one made while a picture was
 	 * stale (the white fill bug, see screen_fill) heals at once instead of at the next scene.
@@ -263,11 +316,15 @@ static void sound_ring_save(void *dst) { (void) dst; }          /* armGBA's stat
 static void sound_ring_load(const void *src) { (void) src; }
 static unsigned char *rom_ptr(void) { return s_rom; }
 static unsigned rom_capacity(void) { return SIZE_ROM; }
-static unsigned char *scratch_ptr(void) { return s_scratch; }
+/* The LK stages a compressed ROM here in its build without the card, at the game's load, when the heap
+ * is still whole; the card build never asks, and the 4 MiB stay the recompiler's. */
+static unsigned char *scratch_ptr(void) { if (!s_scratch) s_scratch = malloc(s_scratch_size); return s_scratch; }
 static unsigned scratch_size(void) { return s_scratch_size; }
 static void *backup_ptr(void) { return s_gba ? s_gba->savedata.storage : NULL; }
 static unsigned backup_size(void) { return s_gba ? (unsigned) sizeof(s_gba->savedata.storage) : 0; }
-static unsigned heap_used(void) { return (unsigned) pico_heap_used(); }
+/* what the heap holds, as the LK reads it: all but what is still to be had (free blocks count as
+ * free, wherever they lie), so it can tell a full heap from one the bump pointer has merely passed */
+static unsigned heap_used(void) { return (unsigned) (pico_heap_size() - pico_heap_avail()); }
 
 const struct gba_core_exports *gba_core_blob_init(const struct gba_core_imports *imp)
 {
