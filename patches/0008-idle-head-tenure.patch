@@ -1,0 +1,67 @@
+armGBA-pico patch to upstream armGBA (src/cpu/jit.c, src/cpu/jit-internal.h), MPL-2.0 like the files it changes.
+Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
+
+--- a/src/cpu/jit.c
++++ b/src/cpu/jit.c
+@@ -1708,6 +1708,30 @@
+ 			return;
+ 		}
+ 	}
++#ifdef ARMGBA_HOST_IDLE_TENURE
++	// With more loops nominated than there are heads, each nomination pushed out the newest head,
++	// which had skipped nothing yet, and both blocks were compiled again: in a busy scene, heads
++	// changed hands a hundred times a second and never lived long enough to be judged (armGBA-pico:
++	// Yoshi's Island, about 230 blocks a second compiled again for this alone). An empty slot is
++	// taken first; a held one only after its tenure. Loads going back put the frame back too, so
++	// the age counts either way.
++	int slot = -1;
++	for (int i = 0; i < IDLE_HEADS; ++i) {
++		int32_t age = (int32_t) (jit->frame - jit->idleHeads[i].since);
++		if (!jit->idleHeads[i].key) {
++			slot = i;
++			break;
++		}
++		if ((age >= IDLE_TENURE || age <= -IDLE_TENURE) && (slot < 0 || jit->idleHeads[i].skips < jit->idleHeads[slot].skips)) {
++			slot = i;
++		}
++	}
++	if (slot < 0) {
++		return;
++	}
++	uint32_t old = jit->idleHeads[slot].key;
++	jit->idleHeads[slot] = (typeof(jit->idleHeads[0])) { span->head, 0, 0, jit->frame };
++#else
+ 	int slot = 0;
+ 	for (int i = 1; i < IDLE_HEADS; ++i) {
+ 		if (jit->idleHeads[i].skips < jit->idleHeads[slot].skips) {
+@@ -1716,6 +1740,7 @@
+ 	}
+ 	uint32_t old = jit->idleHeads[slot].key;
+ 	jit->idleHeads[slot] = (typeof(jit->idleHeads[0])) { span->head, 0, 0 };
++#endif
+ 	if (old) {
+ 		idleRecompile(jit, old);
+ 	}
+--- a/src/cpu/jit-internal.h
++++ b/src/cpu/jit-internal.h
+@@ -232,6 +232,10 @@
+ 	IDLE_GIVE_UP = 64,
+ 	// A waiting loop spans at most this many bytes of code.
+ 	IDLE_SPAN_BYTES = 1024,
++#ifdef ARMGBA_HOST_IDLE_TENURE
++	// A head is kept at least this many frames before a newly nominated loop can take its place.
++	IDLE_TENURE = 120,
++#endif
+ };
+ 
+ // Whether compiled code for the block with this key starts by checking for events since the run
+@@ -312,6 +316,9 @@
+ 		uint32_t key;
+ 		uint32_t probes;
+ 		uint32_t skips;
++#ifdef ARMGBA_HOST_IDLE_TENURE
++		uint32_t since;
++#endif
+ 	} idleHeads[IDLE_HEADS];
+ 	// Heads that never skipped, which aren't made heads again until a flush.
+ 	uint32_t idleRejected[IDLE_HEADS];

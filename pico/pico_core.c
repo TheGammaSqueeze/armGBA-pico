@@ -191,7 +191,8 @@ static void pre_frame(void)
 size_t pico_heap_avail(void);
 void pico_heap_reclaim(void);
 static unsigned s_load_n, s_low_flushes;   /* state loads, and the code flushes the heap guard made (below) */
-volatile uint32_t armgba_pico_stats[8] = { 0x53544154u };   /* "STAT", then the figures below */
+volatile uint32_t armgba_pico_stats[16] = { 0x53544154u };   /* "STAT", then the figures below */
+static unsigned s_load_flushes;   /* code flushes a state load made (the wait states or VRAM code differed) */
 static void stats_update(void)
 {
 	static unsigned n;
@@ -206,6 +207,17 @@ static void stats_update(void)
 		armgba_pico_stats[6] = (uint32_t) jit->compiled;
 	}
 	armgba_pico_stats[7] = s_load_n;
+	if (s_gba->jit) {
+		struct Jit *jit = s_gba->jit;
+		armgba_pico_stats[8] = (uint32_t) jit->invalidations;
+		armgba_pico_stats[9] = (uint32_t) jit->codeWrites;
+		armgba_pico_stats[10] = (uint32_t) jit->patchWrites;
+		armgba_pico_stats[12] = (uint32_t) jit->formMisses;
+		armgba_pico_stats[13] = (uint32_t) jit->revived;
+		armgba_pico_stats[14] = (uint32_t) jit->flushReasons[0];   /* asked for (ROM, wait states) */
+		armgba_pico_stats[15] = (uint32_t) jit->flushReasons[1];   /* the code buffer full */
+	}
+	armgba_pico_stats[11] = s_load_flushes;
 }
 static void post_frame(void)
 {
@@ -302,7 +314,11 @@ static void heap_guard(void)
 static void state_load(const void *buf)
 {
 	if (!s_gba) return;
-	gbaLoadState(s_gba, buf, gbaStateSize());
+	{
+		uint64_t f0 = s_gba->jit ? s_gba->jit->flushes : 0;
+		gbaLoadState(s_gba, buf, gbaStateSize());
+		if (s_gba->jit && s_gba->jit->flushes != f0) s_load_flushes++;
+	}
 	heap_guard();
 	/* A state loaded by the user (Load State, resume) is drawn again in full on its first frame,
 	 * so the picture never depends on the kept pixels in the state: one made while a picture was

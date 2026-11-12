@@ -1,0 +1,103 @@
+armGBA-pico patch to upstream armGBA (src/cpu/jit.c, src/cpu/jit-internal.h), MPL-2.0 like the files it changes.
+Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
+
+--- a/src/cpu/jit-internal.h
++++ b/src/cpu/jit-internal.h
+@@ -236,6 +236,9 @@
+ 	// A head is kept at least this many frames before a newly nominated loop can take its place.
+ 	IDLE_TENURE = 120,
+ #endif
++#ifdef ARMGBA_HOST_MID_ENTRIES
++	MID_ENTRIES = 256,
++#endif
+ };
+ 
+ // Whether compiled code for the block with this key starts by checking for events since the run
+@@ -433,6 +436,17 @@
+ 	uint64_t flushReasons[2];
+ 	uint64_t exits[5];
+ 	uint64_t carefulSteps;
++#ifdef ARMGBA_HOST_MID_ENTRIES
++	// Cartridge places the run loop picked up from inside a block, and the block whose careful copy
++	// went on from there, as of a flush count.
++	struct {
++		uint32_t key;
++		uint32_t index;
++		uint64_t flushes;
++		struct Block* block;
++	} midEntries[MID_ENTRIES];
++	uint64_t midEntered;
++#endif
+ };
+ 
+ enum MemKind {
+--- a/src/cpu/jit.c
++++ b/src/cpu/jit.c
+@@ -1801,6 +1801,55 @@
+ 	return true;
+ }
+ 
++#ifdef ARMGBA_HOST_MID_ENTRIES
++// Where the run loop picks up cartridge code inside a block rather than at its start (back from an
++// interrupt, or after the exact CPU ran past an event), the block's careful copy goes on from that
++// instruction, since it has an entry before each one. Compiling a block of its own from every such
++// place made a block for nearly every instruction of a busy game's main loop, each running on to
++// the end of the one it lies in: the code buffer filled and was thrown away every ten seconds or
++// so, a thousand blocks a second compiled again (armGBA-pico: Yoshi's Island). Returns NULL where
++// no block covers the place, or a block starts there, or there's no room for the careful copy.
++static void* midEntry(struct GBA* gba, uint32_t pc, bool thumb) {
++	struct Jit* jit = gba->jit;
++	uint32_t key = blockKey(pc, thumb);
++	if (!inRom(pc) || findBlock(jit, key)) {
++		return NULL;
++	}
++	typeof(jit->midEntries[0])* slot = &jit->midEntries[hashBlock(key) & (MID_ENTRIES - 1)];
++	struct Block* block = NULL;
++	uint32_t index = 0;
++	// Blocks are only freed by a flush, so one remembered since the last is still there to look at.
++	if (slot->key == key && slot->flushes == jit->flushes && slot->block->valid) {
++		block = slot->block;
++		index = slot->index;
++	} else {
++		int width = thumb ? 2 : 4;
++		for (uint32_t i = 1; i < MAX_BLOCK_INSTS; ++i) {
++			struct Block* at = findBlock(jit, blockKey(pc - i * width, thumb));
++			if (at && at->valid && (uint32_t) at->count > i) {
++				block = at;
++				index = i;
++				break;
++			}
++		}
++		if (!block) {
++			return NULL;
++		}
++		slot->key = key;
++		slot->index = index;
++		slot->flushes = jit->flushes;
++		slot->block = block;
++	}
++	uint64_t flushes = jit->flushes;
++	struct Block* twin = twinOf(gba, block);
++	if (!twin || flushes != jit->flushes || index >= (uint32_t) twin->count || !twin->entries[index]) {
++		return NULL;
++	}
++	++jit->midEntered;
++	return twin->entries[index];
++}
++#endif
++
+ // Runs compiled code where nothing can happen inside its instructions, and the exact CPU around
+ // events, DMA, IRQs and anything else compiled code leaves to it.
+ void jitRunLoop(struct GBA* gba) {
+@@ -1863,6 +1912,11 @@
+ 		}
+ 		struct LookupEntry* cached = &jit->lookup[lookupHash(key)];
+ 		void* entry = resumeHere && resumeKey == key ? resumeHere : cached->key == key ? cached->entry : NULL;
++#ifdef ARMGBA_HOST_MID_ENTRIES
++		if (!entry && !gba->traceFile) {
++			entry = midEntry(gba, pc, thumb);
++		}
++#endif
+ 		if (!entry) {
+ 			struct Block* block = getBlock(gba, pc, thumb);
+ 			if (!block) {

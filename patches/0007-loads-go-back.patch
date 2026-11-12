@@ -1,0 +1,23 @@
+armGBA-pico patch to upstream armGBA (src/cpu/jit.c), MPL-2.0 like the file it changes.
+Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
+
+--- a/src/cpu/jit.c
++++ b/src/cpu/jit.c
+@@ -751,7 +751,17 @@
+ 	if (!sameShape) {
+ 		// A game reloading code here now and then isn't rewriting it as it runs.
+ 		uint16_t frame = gba->video.frameCounter;
++#ifdef ARMGBA_HOST_LOADS_GO_BACK
++		// A state loaded from a moment before (run ahead's undo, rewind) puts the frame counter back:
++		// its rewrite is as recent as the one it undoes, not a long gap. Counted as a gap, every undo
++		// reset the count, the word was never seen to change shape, and the blocks over it were
++		// thrown away and compiled again on every frame (armGBA-pico: Super Mario Advance 3 with run
++		// ahead, some 570 blocks a second, the code buffer full and thrown away every half minute).
++		int16_t ago = (int16_t) (uint16_t) (frame - jit->smcShapeFrame[index]);
++		if (ago > REWRITE_FRAMES || ago < -REWRITE_FRAMES) {
++#else
+ 		if ((uint16_t) (frame - jit->smcShapeFrame[index]) > REWRITE_FRAMES) {
++#endif
+ 			jit->smcShapes[index] = 0;
+ 		}
+ 		jit->smcShapeFrame[index] = frame;
