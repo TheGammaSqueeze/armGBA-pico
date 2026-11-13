@@ -31,6 +31,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <math.h>
 
 #include "gba.h"
 #include "cpu/jit.h"
@@ -69,7 +70,7 @@ static unsigned int s_skip_next_frame;   /* the LK sets it for a frame it will n
 
 /* ---- options ---------------------------------------------------------------------------------- */
 
-enum { OPT_BIOS, OPT_GHOSTING, OPT_INTERLACED, OPT_LOWPASS, OPT_SOLAR, OPT_COUNT };
+enum { OPT_BIOS, OPT_GHOSTING, OPT_INTERLACED, OPT_LOWPASS, OPT_SOLAR, OPT_MOTION, OPT_RUMBLE, OPT_COUNT };
 
 static const char *const v_bios[] = { "Nintendo (SD card)", "armGBA (built in)" };
 static const char *const v_ghost[] = { "Off", "25%", "50%", "75%", "100%" };
@@ -83,8 +84,115 @@ static const struct gba_core_option s_opts[OPT_COUNT] = {
 	{ "armgba_interlaced", "Interlaced Rows", v_onoff, 2, 0, 0 },
 	{ "armgba_lowpass", "Audio Low-Pass Filter", v_lowpass, 5, 0, 0 },
 	{ "armgba_solar", "Solar Sensor", v_solar, 11, 5, 0 },
+	{ "armgba_motion", "Motion Controls", v_onoff, 2, 1, 0 },
+	{ "armgba_rumble", "Rumble", v_onoff, 2, 1, 0 },
 };
-static int s_opt[OPT_COUNT] = { 0, 0, 0, 0, 5 };
+static int s_opt[OPT_COUNT] = { 0, 0, 0, 0, 5, 1, 1 };
+
+/* ---- motion ------------------------------------------------------------------------------------
+ * For a cartridge with a tilt sensor or a gyro the LK hands over the console's gravity each frame
+ * (set_motion, device frame: x and y in the screen plane, z out of it). The console has an
+ * accelerometer and no gyroscope: the tilt sensor reads gravity as it is, and the gyro's turn
+ * is how fast gravity turns in the screen plane between two readings (the console turning the
+ * other way). Scaled as armGBA's own frontend scales its stick
+ * and gyro: a full stick is 0x7FFF, and the cartridge's gyro reads to about 5 rad/s either way. */
+static volatile int s_mx, s_my, s_mz, s_mfresh;
+static float s_gx, s_gy, s_gz;          /* gravity, smoothed */
+static float s_turn;                    /* the turn, smoothed, in steps of 5 rad/s */
+static unsigned s_mprev_ms;
+static int s_mstate;                    /* 0 nothing yet, 1 first reading, 2 running */
+
+static void motion_reset(void) { s_mstate = 0; s_mfresh = 0; s_turn = 0; }
+static int motion_wanted(void)
+{
+	return s_gba && (s_gba->gpio.devices & (HW_TILT | HW_GYRO)) && s_opt[OPT_MOTION];
+}
+static void set_motion(int x, int y, int z) { s_mx = x; s_my = y; s_mz = z; s_mfresh = 1; }
+/* the cartridge's rumble motor since the LK last asked (WarioWare: Twisted!, Drill Dozer): the
+ * writes that left it running (a game may run it for only part of a frame), or 1 while it is
+ * still on with no new write; 0 when it stayed off. The LK drives the console's motor with it. */
+static int rumble(void)
+{
+	int n;
+	if (!s_gba || !(s_gba->gpio.devices & HW_RUMBLE) || !s_opt[OPT_RUMBLE]) { gpioRumbleOnWrites = 0; return 0; }
+	n = (int) gpioRumbleOnWrites;
+	gpioRumbleOnWrites = 0;
+	return n ? n : s_gba->gpio.rumble;
+}
+
+static unsigned peek16(unsigned address)
+{
+	int cycles = 0;
+	unsigned const region = address >> 24;
+	if (!s_gba || (region != 0x02 && region != 0x03)) return 0;   /* work RAM only: no side effects */
+	return memoryLoad16(s_gba, address & ~1u, &cycles) & 0xFFFF;
+}
+static void motion_info(int out[6])
+{
+	if (!s_gba) { int i; for (i = 0; i < 6; i++) out[i] = -1; return; }
+	out[0] = s_gba->gpio.devices;
+	out[1] = (int) s_gba->savedata.type;
+	out[2] = s_mstate;
+	out[3] = s_gba->gpio.tiltX;
+	out[4] = s_gba->gpio.tiltY;
+	out[5] = s_gba->gpio.gyroSample;
+}
+static float clampf(float v, float lim) { return v > lim ? lim : v < -lim ? -lim : v; }
+
+static void motion_frame(void)
+{
+	float x, y, z, mag, nx, ny, nz;
+	unsigned now;
+	if (!(s_gba->gpio.devices & (HW_TILT | HW_GYRO))) return;
+	if (!s_opt[OPT_MOTION]) {
+		s_gba->gpio.tiltInputX = 0; s_gba->gpio.tiltInputY = 0; s_gba->gpio.gyroZ = 0;
+		return;
+	}
+	if (!s_mfresh) return;                  /* the last values stand until a new reading */
+	s_mfresh = 0;
+	x = (float) s_mx; y = (float) s_my; z = (float) s_mz;
+	now = s_imp && s_imp->host_ms ? s_imp->host_ms() : 0;
+	if (s_mstate == 0) {
+		s_gx = x; s_gy = y; s_gz = z;
+		s_mprev_ms = now;
+		s_mstate = 1;
+		return;
+	}
+	{	/* the turn: the angle between the in-plane gravity before and after, over the time between */
+		float const px = s_gx, py = s_gy;
+		float const dt = (float) (now - s_mprev_ms) / 1000.0f;
+		float turn = 0, pp, cc;
+		s_gx += (x - s_gx) * 0.5f; s_gy += (y - s_gy) * 0.5f; s_gz += (z - s_gz) * 0.5f;
+		s_mprev_ms = now;
+		pp = px * px + py * py;
+		cc = s_gx * s_gx + s_gy * s_gy;
+		mag = cc + s_gz * s_gz;
+		/* only while the screen plane holds a fair share of gravity, the console held up */
+		if (dt > 0.001f && dt < 0.2f && pp > 0 && cc > 0.09f * mag) {
+			float const sine = (px * s_gy - py * s_gx) / sqrtf(pp * cc);
+			turn = sine / dt / 5.0f;
+			if (turn > -0.05f && turn < 0.05f) turn = 0;   /* still: under about 0.25 rad/s */
+		}
+		s_turn += (turn - s_turn) * 0.6f;
+	}
+	mag = sqrtf(s_gx * s_gx + s_gy * s_gy + s_gz * s_gz);
+	if (mag <= 0) return;
+	nx = s_gx / mag;
+	ny = s_gy / mag;
+	nz = s_gz / mag;
+	if (s_mstate == 1) s_mstate = 2;
+	(void) nz;
+	/* tilt: the cartridge's sensor sits in the console, so it reads the gravity the console
+	 * reads, across the screen (x) and along it (y). A g either side of the 0x3a0 a level sensor
+	 * reads is a full stick (0x7fff), the scale and orientation armGBA's own frontend gives a
+	 * device's accelerometer: X falls as the right side goes down, Y rises with the far edge.
+	 * The core latches tiltX = 0x3a0 - (tiltInputX >> 22). Yoshi Topsy-Turvy reads X alone
+	 * and learns its direction and range from its own calibration pages, so a calibration made
+	 * with the console held flat leaves it a deadzone of a few degrees that tips either way. */
+	s_gba->gpio.tiltInputX = (int32_t) (clampf(-nx, 2.0f) * 0x7FFF) * 0x3800;
+	s_gba->gpio.tiltInputY = (int32_t) (clampf(ny, 2.0f) * 0x7FFF) * 0x3800;
+	s_gba->gpio.gyroZ = (int32_t) (clampf(s_turn, 2.0f) * 0x7FFF * 11000.0f);
+}
 
 static int opt_count(void) { return OPT_COUNT; }
 static const struct gba_core_option *opt_info(int i) { return (i >= 0 && i < OPT_COUNT) ? &s_opts[i] : NULL; }
@@ -158,11 +266,13 @@ static int core_start(unsigned romsz, const void *bios16k)
 	s_shown_frame = 0xFFFFFFFFu;
 	s_lp_last[0] = s_lp_last[1] = 0;
 	picoLcdReset();
+	motion_reset();
+	gpioRumbleOnWrites = 0;
 	return 0;
 }
 
 static void enter_bios(void) { if (s_gba) gbaReset(s_gba, false); }
-static void reset(void) { if (s_gba) { gbaReset(s_gba, true); picoLcdReset(); } }
+static void reset(void) { if (s_gba) { gbaReset(s_gba, true); picoLcdReset(); motion_reset(); gpioRumbleOnWrites = 0; } }
 
 static void cpu_loop(void)
 {
@@ -182,6 +292,7 @@ static void pre_frame(void)
 	if (!s_gba) return;
 	videoDrawSkipped = s_skip_next_frame != 0;   /* lines 0..159 of the frame about to run */
 	gbaSetKeys(s_gba, (uint16_t) s_keys);
+	motion_frame();
 	if (s_gba->gpio.devices & HW_LIGHT_SENSOR) {
 		int const level = s_opt[OPT_SOLAR];
 		s_gba->gpio.luminance = (uint8_t) (0xFF - (0x16 + (level ? levels[level - 1] : 0)));
@@ -334,7 +445,7 @@ static unsigned heap_used(void) { return (unsigned) (pico_heap_size() - pico_hea
 const struct gba_core_exports *gba_core_blob_init(const struct gba_core_imports *imp)
 {
 	static const struct gba_core_exports exports = {
-		GBA_CORE_ABI_MAGIC, GBA_CORE_ABI_V3,
+		GBA_CORE_ABI_MAGIC, GBA_CORE_ABI_V4,
 		core_init, core_start, enter_bios, reset,
 		cpu_loop, pre_frame, post_frame,
 		frame_boundary_finish, cpu_ticks, set_keys,
@@ -349,6 +460,7 @@ const struct gba_core_exports *gba_core_blob_init(const struct gba_core_imports 
 		ARMGBA_PICO_VERSION, 32768u, "/states/armgba",   /* armGBA's own 32768 Hz, resampled once in the LK */
 		opt_count, opt_info, opt_get, opt_set,
 		heap_used,
+		motion_wanted, set_motion, motion_info, peek16, rumble,
 	};
 	s_imp = imp;
 	return &exports;

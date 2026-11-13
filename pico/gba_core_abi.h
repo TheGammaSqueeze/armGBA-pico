@@ -41,7 +41,8 @@
 #define GBA_CORE_ABI_MAGIC   0x41424743u   /* "GCBA" */
 #define GBA_CORE_ABI_VERSION 2u   /* 2: skip_next_frame (the gpSP blob in boot_b) */
 #define GBA_CORE_ABI_V3      3u   /* 3: name, audio rate, state folder, options (armGBA-pico from the SD card) */
-#define GBA_CORE_ABI_MAX     GBA_CORE_ABI_V3
+#define GBA_CORE_ABI_V4      4u   /* 4: motion for tilt and gyro cartridges, and rumble */
+#define GBA_CORE_ABI_MAX     GBA_CORE_ABI_V4
 
 /* A core option the LK can show in the Core Settings submenu (version 3). The LK persists the
  * chosen index per key and hands it back with opt_set before the next game starts. */
@@ -128,6 +129,19 @@ struct gba_core_exports {
 	int  (*opt_get)(int index);
 	void (*opt_set)(int index, int value);
 	unsigned (*heap_used)(void);                          /* diagnostics: arena bytes in use */
+
+	/* version 4: the console's motion for cartridges with a tilt sensor or a gyro. The LK asks
+	 * motion_wanted() each frame and, while it is 1, reads the accelerometer and hands the
+	 * gravity it measured to set_motion(): device frame (x and y in the screen plane, z out of
+	 * it), any consistent scale, only the direction is used. Never called on an older core. */
+	int  (*motion_wanted)(void);
+	void (*set_motion)(int x, int y, int z);
+	/* diagnostics: [0] cartridge devices, [1] save type, [2] motion state, [3] tilt X and [4] tilt Y
+	 * as the game last sampled them (0xFFF until it samples), [5] gyro reading */
+	void (*motion_info)(int out[6]);
+	/* diagnostics: a halfword of the GBA's work RAM (0x02 and 0x03 regions only, 0 elsewhere) */
+	unsigned (*peek16)(unsigned address);
+	int  (*rumble)(void);                  /* the cartridge's rumble motor now: 0 off, else on */
 };
 
 /* The blob's single fixed entry symbol. The loader resolves it at a known offset (e.g.

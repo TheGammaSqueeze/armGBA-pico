@@ -174,18 +174,35 @@ it for Game Boy Advance games when it is there, and gpSP from boot_b when it is 
 | Interlaced Rows | Off, On | with LCD Ghosting, alternate rows driven harder each frame, as on the console |
 | Audio Low-Pass Filter | Off, 20 %, 40 %, 60 %, 80 % | |
 | Solar Sensor | 0 to 10 | the sunlight level for Boktai and other solar sensor cartridges |
+| Motion Controls | Off, On | the console's accelerometer for tilt cartridges (Yoshi Topsy-Turvy, Koro Koro Puzzle) and gyro cartridges (WarioWare: Twisted!) |
 
 armGBA's other options are either already provided by the LK (BIOS intro skip, colour
 correction, the LCD filters, turbo buttons, the restart combo) or need hardware and a frontend this
-target does not have (link cable and netplay, tilt and gyro sensors, threaded video, the Game Boy
-core).
+target does not have (link cable and netplay, threaded video, the Game Boy core).
+
+### Motion
+
+The LK reads the console's accelerometer once a frame while the cartridge has a tilt or gyro
+sensor and Motion Controls is on, and passes it to `set_motion` in the console's frame (x across
+the screen, y along it, z out of it, 2048 to a g). `pico/pico_core.c` turns it into what the
+cartridge's sensor would read:
+
+- **Tilt:** gravity across and along the screen, a g either way being a full deflection, in the
+  orientation armGBA's own frontend uses. Yoshi Topsy-Turvy reads only the left and right tilt and
+  learns its direction and range on its calibration pages (press A while tilting, once each way);
+  a calibration done with the console flat leaves it a dead zone of a few degrees.
+- **Gyro:** the console has no gyroscope, so the turn rate in the screen's plane comes from how far
+  gravity's direction in that plane moved since the last frame. Turning the console like a steering
+  wheel, as WarioWare: Twisted! asks, is exactly that.
 
 ## Target notes for maintainers
 
 - **The interface.** `pico/gba_core_abi.h` is the contract with the LK: a table of functions and
   pointers the LK's GBA driver calls (`gba_core_exports`) and the services it gives the core
   (`gba_core_imports`). Version 2 is gpSP's; version 3 adds the core's name, its audio rate, its
-  state folder and the option table. Keep the copy here identical to the LK's.
+  state folder and the option table; version 4 adds motion (`motion_wanted`, `set_motion`,
+  `motion_info`) and `peek16`, which reads work RAM for the LK's diagnostics. Keep the copy here
+  identical to the LK's.
 - **Threads.** The LK runs the core on one thread that yields once per frame. armGBA's render
   thread (Threaded Video) is never started; `pico/include/pthread.h` only lets its file compile.
 - **NEON.** The LK does not save NEON or VFP registers on a thread switch. The core's thread and
@@ -196,8 +213,8 @@ core).
   heap there: the 32 MiB ROM buffer, the 16 MiB recompiler code buffer (the arena is mapped
   executable), the machine (about 770 KiB) and the recompiler's tables. The LK's menu uses the same
   arena while it is open, so the LK calls `core_init` again before every game.
-- **Audio.** armGBA makes 32768 Hz stereo; the LK's GBA audio path takes gpSP's 65536 Hz, so
-  `post_frame` doubles the rate by linear interpolation.
+- **Audio.** armGBA makes 32768 Hz stereo and reports that rate (`audio_rate`); the LK resamples
+  it to the codec's 48 kHz in one step, as it does gpSP's 65536 Hz.
 - **The picture buffer.** armGBA keeps a line's pixels while nothing it shows changes. The LK
   fills the core's screen white at a game start (`screen_fill`, made for gpSP, which draws every
   line every frame); the glue then marks every line for drawing, or the white stayed on the lines

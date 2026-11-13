@@ -1,0 +1,38 @@
+armGBA-pico patch to upstream armGBA (src/cart/gpio.c, src/gba.h), MPL-2.0 like the files it changes.
+Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
+
+A game may run its rumble motor for only part of a frame, and a frontend that looks at the pin
+once a frame then misses it. The writes that leave the motor running are counted where the
+frontend can see them, outside struct Gpio so save states keep their layout.
+
+--- a/src/cart/gpio.c
++++ b/src/cart/gpio.c
+@@ -216,9 +216,17 @@
+ 	hw->gyroEdge = !!(hw->pinState & 2);
+ }
+ 
++// The writes since the frontend last looked that left the motor running. A game may run the motor
++// for only part of a frame, so a frontend that looks once a frame counts these rather than taking
++// the pin as the frame ends. Kept outside struct Gpio so save states keep their layout.
++uint32_t gpioRumbleOnWrites;
++
+ // Pin 3 runs the motor.
+ static void rumbleReadPins(struct GBA* gba) {
+ 	gba->gpio.rumble = !!(gba->gpio.pinState & 8);
++	if (gba->gpio.rumble) {
++		++gpioRumbleOnWrites;
++	}
+ }
+ 
+ // Boktai's sensor: pin 1 resets a counter that pin 0 clocks, and pin 3 reads high once the count
+--- a/src/gba.h
++++ b/src/gba.h
+@@ -1143,6 +1143,8 @@
+ // The tilt sensor, mapped into the save memory's addresses; offset is the address's low 24 bits.
+ uint8_t gpioTiltRead(struct GBA*, uint32_t offset);
+ void gpioTiltWrite(struct GBA*, uint32_t offset, uint8_t value);
++// Writes that left the rumble motor running since the frontend last cleared this (cart/gpio.c).
++extern uint32_t gpioRumbleOnWrites;
+ 
+ // sio.c
+ void sioInit(struct GBA*);
