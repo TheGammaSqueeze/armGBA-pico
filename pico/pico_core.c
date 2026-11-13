@@ -25,8 +25,7 @@
  *   backup_*                 the 128 KiB save storage, the same layout as gpSP's, so .sav files
  *                            carry over between the two cores.
  *
- * Version 3 of the table adds what gpSP did not need: the core's name, its audio rate (65536 Hz
- * after post_frame's 2x interpolation of armGBA's 32768 Hz, gpSP's rate), its own state folder (states are not compatible between cores), and the
+ * Version 3 of the table adds what gpSP did not need: the core's name, its audio rate (32768 Hz, armGBA's own; gpSP uses 65536), its own state folder (states are not compatible between cores), and the
  * options the LK lists in its Core Settings submenu.
  */
 #include <stdbool.h>
@@ -57,7 +56,6 @@ static uint32_t s_shown_frame = 0xFFFFFFFFu;
 static const uint16_t *s_shown;
 static unsigned s_frames;
 static int32_t s_lp_last[2];
-static int32_t s_up_last[2];   /* the last sample out, for the 2x interpolation */
 
 /* the flags the driver shares with gpSP; only audio_suppress means anything here */
 static int s_dynarec_enable = 1;
@@ -243,24 +241,9 @@ static void post_frame(void)
 			k[i] = (int16_t) s_lp_last[i & 1];
 		}
 	}
-	/* The LK's GBA audio path was built for gpSP's 65536 Hz: its resampler only ever brings the
-	 * rate down to the 48 kHz output. armGBA makes 32768 Hz, so every sample is preceded by the
-	 * midpoint to the one before: 65536 Hz, linear interpolation. */
-	{
-		static int16_t up[4096 * 2 * 2];
-		const int16_t *k = (const int16_t *) a->out;
-		unsigned m = n > 4096 ? 4096 : n;
-		for (unsigned i = 0; i < m; ++i) {
-			int16_t const l = k[i * 2], r = k[i * 2 + 1];
-			up[i * 4 + 0] = (int16_t) ((s_up_last[0] + l) >> 1);
-			up[i * 4 + 1] = (int16_t) ((s_up_last[1] + r) >> 1);
-			up[i * 4 + 2] = l;
-			up[i * 4 + 3] = r;
-			s_up_last[0] = l;
-			s_up_last[1] = r;
-		}
-		s_imp->audio_submit(up, m * 2);
-	}
+	/* armGBA's own 32768 Hz goes straight to the LK, which resamples it once to the ring's
+	 * 48 kHz; the earlier doubling to 65536 only fed a coarser resampler and is gone. */
+	s_imp->audio_submit((const int16_t *) a->out, n);
 }
 
 static void frame_boundary_finish(void) { }
@@ -363,7 +346,7 @@ const struct gba_core_exports *gba_core_blob_init(const struct gba_core_imports 
 		backup_ptr, backup_size,
 		&s_dynarec_enable, &s_audio_suppress, &s_load_light,
 		&s_skip_next_frame,
-		ARMGBA_PICO_VERSION, 65536u, "/states/armgba",   /* armGBA makes 32768 Hz; post_frame doubles it */
+		ARMGBA_PICO_VERSION, 32768u, "/states/armgba",   /* armGBA's own 32768 Hz, resampled once in the LK */
 		opt_count, opt_info, opt_get, opt_set,
 		heap_used,
 	};
