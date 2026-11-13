@@ -72,7 +72,35 @@ static struct {
 	unsigned frames;
 } ghost;
 
-void picoLcdReset(void) { ghost.valid = false; }
+/* Interlaced Rows with LCD Ghosting off (upstream libretro/lcd.c, its interlaced-without-ghosting
+ * path): each frame one set of alternate rows takes the new picture and the others keep what they
+ * last showed, as the Advance's panel drives alternate rows harder each frame. There is no
+ * persistence blend and no strength tables, so it runs with Ghosting off (strength 0). */
+static struct {
+	uint16_t shown[W * H];
+	unsigned frames;
+	bool valid;
+} woven;
+
+void picoLcdReset(void) { ghost.valid = false; woven.valid = false; }
+
+/* Interlaced Rows on its own: the first frame, or one after a reset, is shown whole; each later frame
+ * refreshes every other row (odd rows one frame, even the next) and leaves the rest as they were.
+ * Static pictures are unchanged; moving ones show alternate rows a frame behind, the interlacing the
+ * console's panel makes. */
+static const uint16_t* wovenRows(const uint16_t* picture) {
+	if (!woven.valid) {
+		memcpy(woven.shown, picture, sizeof woven.shown);
+		woven.frames = 0;
+		woven.valid = true;
+		return woven.shown;
+	}
+	++woven.frames;
+	for (unsigned y = woven.frames & 1; y < H; y += 2) {
+		memcpy(woven.shown + y * W, picture + y * W, W * 2);
+	}
+	return woven.shown;
+}
 
 /* upstream ghostJob for every row, 16 bit pixels */
 static void ghostRows(const uint16_t* picture, bool alternate) {
@@ -116,9 +144,18 @@ static void ghostRows(const uint16_t* picture, bool alternate) {
 /* upstream showPicture, for a 240 x 160 RGB565 frame; strength 1..4 = 25 % .. 100 % */
 const uint16_t* picoLcdProcess(const uint16_t* picture, int strength, bool interlaced) {
 	if (strength <= 0) {
+		/* Ghosting off: no persistence state is kept. Interlaced Rows still runs on its own; the
+		 * tables below are never built, so nothing divides by or indexes on a zero strength. */
 		ghost.valid = false;
+		if (interlaced) {
+			return wovenRows(picture);
+		}
+		woven.valid = false;
 		return picture;
 	}
+	/* Ghosting on: its persistence model carries the interlacing (the alternate rows share the time
+	 * through the strong and weak tables), so the standalone buffer is left idle. */
+	woven.valid = false;
 	/* Interlaced Rows on the Advance's panel: the harder driven rows' share of the time and the
 	 * others' so that the two frames' rates add up to two plain ones */
 	bool const alternate = interlaced;

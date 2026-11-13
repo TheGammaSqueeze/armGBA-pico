@@ -3,7 +3,7 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
 
 --- a/src/cpu/jit.c
 +++ b/src/cpu/jit.c
-@@ -751,7 +751,17 @@
+@@ -753,7 +753,17 @@
  	if (!sameShape) {
  		// A game reloading code here now and then isn't rewriting it as it runs.
  		uint16_t frame = gba->video.frameCounter;

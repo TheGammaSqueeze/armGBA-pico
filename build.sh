@@ -49,13 +49,13 @@ TUNE=${TUNE:-cortex-a55}
 ARCH="-march=armv8-a+simd -mtune=$TUNE -marm -mfpu=neon-fp-armv8 -mfloat-abi=softfp"
 CFLAGS="$ARCH -std=gnu11 ${OPT:--O3} -flto -ffunction-sections -fdata-sections -fno-common \
 	${EXTRA_CFLAGS:-} -Wall -Wno-unused-parameter -Wno-unused-function \
-	-DARMGBA_HOST_ROM_BUFFER -DARMGBA_HOST_RENDER_SKIP -DARMGBA_HOST_LOAD_KEEPS_CODE -DARMGBA_HOST_LOAD_COPY -DARMGBA_HOST_CODE_MIB=30 -DARMGBA_HOST_LOADS_GO_BACK -DARMGBA_HOST_IDLE_TENURE -DARMGBA_HOST_MID_ENTRIES -I$ROOT/pico/include -I$ROOT/pico -I$OUT/src -I$OUT \
+	-DARMGBA_HOST_ROM_BUFFER -DARMGBA_HOST_LOAD_KEEPS_CODE -DARMGBA_HOST_LOAD_COPY -DARMGBA_HOST_CODE_MIB=30 -DARMGBA_HOST_LOADS_GO_BACK -DARMGBA_HOST_IDLE_TENURE -DARMGBA_HOST_MID_ENTRIES -I$ROOT/pico/include -I$ROOT/pico -I$OUT/src -I$OUT \
 	-include $ROOT/pico/include/pico_time.h"
 
 # armGBA's core sources (upstream CMakeLists.txt CORE_SOURCES) with the 32 bit ARM backend and
 # the NEON renderer, as upstream selects them for an "arm" processor
 CORE="bios-image.c bus.c cheats.c gba.c memory.c state.c timing.c audio/audio.c audio/psg.c
-	cart/cart.c cart/gpio.c cart/overrides.c cart/savedata.c cpu/arm.c cpu/decode.c cpu/step.c
+	cart/cart.c cart/ereader.c cart/gpio.c cart/overrides.c cart/savedata.c cpu/arm.c cpu/decode.c cpu/step.c
 	io/dma.c io/io.c io/rfu.c io/sio.c io/timer.c video/render-thread.c video/render.c
 	video/video.c video/render-neon.c cpu/jit.c cpu/a32/backend.c"
 PICO="pico_core.c pico_lcd.c pico_libc.c"

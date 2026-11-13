@@ -1,39 +1,9 @@
-armGBA-pico patch to upstream armGBA (src/cpu/jit.c, src/cpu/jit-internal.h), MPL-2.0 like the files it changes.
+armGBA-pico patch to upstream armGBA (src/cpu/jit.c, src/cpu/jit-internal.h), MPL-2.0 like the file it changes.
 Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
 
---- a/src/cpu/jit-internal.h
-+++ b/src/cpu/jit-internal.h
-@@ -236,6 +236,9 @@
- 	// A head is kept at least this many frames before a newly nominated loop can take its place.
- 	IDLE_TENURE = 120,
- #endif
-+#ifdef ARMGBA_HOST_MID_ENTRIES
-+	MID_ENTRIES = 256,
-+#endif
- };
- 
- // Whether compiled code for the block with this key starts by checking for events since the run
-@@ -433,6 +436,17 @@
- 	uint64_t flushReasons[2];
- 	uint64_t exits[5];
- 	uint64_t carefulSteps;
-+#ifdef ARMGBA_HOST_MID_ENTRIES
-+	// Cartridge places the run loop picked up from inside a block, and the block whose careful copy
-+	// went on from there, as of a flush count.
-+	struct {
-+		uint32_t key;
-+		uint32_t index;
-+		uint64_t flushes;
-+		struct Block* block;
-+	} midEntries[MID_ENTRIES];
-+	uint64_t midEntered;
-+#endif
- };
- 
- enum MemKind {
 --- a/src/cpu/jit.c
 +++ b/src/cpu/jit.c
-@@ -1801,6 +1801,55 @@
+@@ -1902,6 +1902,55 @@
  	return true;
  }
  
@@ -89,7 +59,7 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
  // Runs compiled code where nothing can happen inside its instructions, and the exact CPU around
  // events, DMA, IRQs and anything else compiled code leaves to it.
  void jitRunLoop(struct GBA* gba) {
-@@ -1863,6 +1912,11 @@
+@@ -1973,6 +2022,11 @@
  		}
  		struct LookupEntry* cached = &jit->lookup[lookupHash(key)];
  		void* entry = resumeHere && resumeKey == key ? resumeHere : cached->key == key ? cached->entry : NULL;
@@ -101,3 +71,33 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
  		if (!entry) {
  			struct Block* block = getBlock(gba, pc, thumb);
  			if (!block) {
+--- a/src/cpu/jit-internal.h
++++ b/src/cpu/jit-internal.h
+@@ -242,6 +242,9 @@
+ 	// A head is kept at least this many frames before a newly nominated loop can take its place.
+ 	IDLE_TENURE = 120,
+ #endif
++#ifdef ARMGBA_HOST_MID_ENTRIES
++	MID_ENTRIES = 256,
++#endif
+ };
+ 
+ // Whether compiled code for the block with this key starts by checking for events since the run
+@@ -467,6 +470,17 @@
+ 	uint64_t flushReasons[2];
+ 	uint64_t exits[5];
+ 	uint64_t carefulSteps;
++#ifdef ARMGBA_HOST_MID_ENTRIES
++	// Cartridge places the run loop picked up from inside a block, and the block whose careful copy
++	// went on from there, as of a flush count.
++	struct {
++		uint32_t key;
++		uint32_t index;
++		uint64_t flushes;
++		struct Block* block;
++	} midEntries[MID_ENTRIES];
++	uint64_t midEntered;
++#endif
+ };
+ 
+ enum MemKind {

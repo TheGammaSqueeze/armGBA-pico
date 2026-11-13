@@ -3,7 +3,7 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
 
 --- a/src/state.c
 +++ b/src/state.c
-@@ -233,7 +233,16 @@
+@@ -270,7 +270,16 @@
  #else
  	bool flush = codeChanged(gba, saved);
  #endif
@@ -20,7 +20,7 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
  	if (!host) {
  		return false;
  	}
-@@ -318,7 +327,9 @@
+@@ -356,7 +365,9 @@
  		}
  	}
  #endif
@@ -28,5 +28,5 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
  	free(host);
 +#endif
  
- 	jitStateLoaded(gba, flush);
- 	cartRestore(gba);
+ 	if (header.gpioKept && gba->rom) {
+ 		memcpy(&gba->rom[GPIO_REGISTERS], header.gpioRegisters, sizeof(header.gpioRegisters));

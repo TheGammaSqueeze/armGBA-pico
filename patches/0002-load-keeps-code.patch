@@ -11,7 +11,7 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
  
  #include <stdlib.h>
  #include <string.h>
-@@ -219,7 +220,19 @@
+@@ -256,7 +257,19 @@
  	if ((saved->romSize != gba->romSize && !gba->cart.multi) || saved->multibootSize != gba->multibootSize) {
  		return false;
  	}
@@ -31,7 +31,7 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
  	struct GBA* host = malloc(sizeof(*host));
  	if (!host) {
  		return false;
-@@ -288,6 +301,23 @@
+@@ -326,6 +339,23 @@
  		link = &(*link)->next;
  	}
  	timingResetNextEvent(gba);
@@ -54,4 +54,4 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
 +#endif
  	free(host);
  
- 	jitStateLoaded(gba, flush);
+ 	if (header.gpioKept && gba->rom) {

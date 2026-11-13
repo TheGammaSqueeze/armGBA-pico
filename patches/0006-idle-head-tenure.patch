@@ -1,9 +1,9 @@
-armGBA-pico patch to upstream armGBA (src/cpu/jit.c, src/cpu/jit-internal.h), MPL-2.0 like the files it changes.
+armGBA-pico patch to upstream armGBA (src/cpu/jit.c, src/cpu/jit-internal.h), MPL-2.0 like the file it changes.
 Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
 
 --- a/src/cpu/jit.c
 +++ b/src/cpu/jit.c
-@@ -1708,6 +1708,30 @@
+@@ -1809,6 +1809,30 @@
  			return;
  		}
  	}
@@ -34,7 +34,7 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
  	int slot = 0;
  	for (int i = 1; i < IDLE_HEADS; ++i) {
  		if (jit->idleHeads[i].skips < jit->idleHeads[slot].skips) {
-@@ -1716,6 +1740,7 @@
+@@ -1817,6 +1841,7 @@
  	}
  	uint32_t old = jit->idleHeads[slot].key;
  	jit->idleHeads[slot] = (typeof(jit->idleHeads[0])) { span->head, 0, 0 };
@@ -44,7 +44,7 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
  	}
 --- a/src/cpu/jit-internal.h
 +++ b/src/cpu/jit-internal.h
-@@ -232,6 +232,10 @@
+@@ -238,6 +238,10 @@
  	IDLE_GIVE_UP = 64,
  	// A waiting loop spans at most this many bytes of code.
  	IDLE_SPAN_BYTES = 1024,
@@ -55,7 +55,7 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
  };
  
  // Whether compiled code for the block with this key starts by checking for events since the run
-@@ -312,6 +316,9 @@
+@@ -318,6 +322,9 @@
  		uint32_t key;
  		uint32_t probes;
  		uint32_t skips;

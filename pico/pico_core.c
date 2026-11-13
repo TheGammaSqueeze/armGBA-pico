@@ -65,7 +65,9 @@ static volatile int s_audio_suppress;
 static int s_load_light;
 static unsigned int s_skip_next_frame;   /* the LK sets it for a frame it will not show (fast forward,
                                            * run ahead): pre_frame hands it to the renderer */
-extern bool armgbaRenderSkip;             /* patches/0002-host-render-skip.patch */
+/* armGBA 1.6 skips the drawing itself for a frame the frontend won't show (videoDrawSkipped, its own
+ * Fast-Forward Skip): the lines keep their per line bookkeeping and are redrawn the next frame shown.
+ * It is declared in gba.h and reset by the core at each frame's end, so pre_frame sets it each time. */
 
 /* ---- options ---------------------------------------------------------------------------------- */
 
@@ -92,7 +94,9 @@ static int opt_get(int i) { return (i >= 0 && i < OPT_COUNT) ? s_opt[i] : 0; }
 static void opt_set(int i, int v)
 {
 	if (i < 0 || i >= OPT_COUNT || v < 0 || v >= s_opts[i].nvalues) return;
-	if (i == OPT_GHOSTING && v != s_opt[i]) picoLcdReset();
+	/* Either LCD option changing starts the model afresh, so the held rows and the ghost state do
+	 * not carry over from the old setting. */
+	if ((i == OPT_GHOSTING || i == OPT_INTERLACED) && v != s_opt[i]) picoLcdReset();
 	s_opt[i] = v;
 }
 
@@ -178,7 +182,7 @@ static void pre_frame(void)
 {
 	static const int levels[10] = { 5, 11, 18, 27, 42, 62, 84, 109, 139, 183 };   /* upstream libretro.c */
 	if (!s_gba) return;
-	armgbaRenderSkip = s_skip_next_frame != 0;   /* lines 0..159 of the frame about to run */
+	videoDrawSkipped = s_skip_next_frame != 0;   /* lines 0..159 of the frame about to run */
 	gbaSetKeys(s_gba, (uint16_t) s_keys);
 	if (s_gba->gpio.devices & HW_LIGHT_SENSOR) {
 		int const level = s_opt[OPT_SOLAR];
@@ -268,7 +272,9 @@ static const unsigned short *screen(void)
 	const uint16_t *f;
 	if (!s_gba) return NULL;
 	f = &s_gba->renderer.frame[0][0];
-	if (!s_opt[OPT_GHOSTING]) return f;
+	/* Either effect sends the frame through the LCD model; Interlaced Rows runs on its own with LCD
+	 * Ghosting off (pico_lcd.c), so it is no longer gated on the ghosting strength. */
+	if (!s_opt[OPT_GHOSTING] && !s_opt[OPT_INTERLACED]) return f;
 	/* the model steps once per new frame, however often the driver asks for the picture */
 	if (s_shown_frame != s_gba->video.frameCounter) {
 		s_shown_frame = s_gba->video.frameCounter;

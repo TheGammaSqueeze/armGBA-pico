@@ -1,10 +1,9 @@
 armGBA-pico patch to upstream armGBA (src/gba.c), MPL-2.0 like the file it changes.
 Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
 
-diff --git a/src/gba.c b/src/gba.c
 --- a/src/gba.c
 +++ b/src/gba.c
-@@ -133,6 +133,13 @@
+@@ -137,6 +137,13 @@
  	return gba;
  }
  
@@ -18,7 +17,7 @@ diff --git a/src/gba.c b/src/gba.c
  // Cartridges mapped from their files (gbaMapRom), which the host can drop from memory and read
  // again as the game needs them.
  static uint8_t* mappedRoms[8];
-@@ -147,6 +154,7 @@
+@@ -155,6 +162,7 @@
  	}
  	free(rom);
  }
@@ -26,7 +25,7 @@ diff --git a/src/gba.c b/src/gba.c
  
  void gbaDestroy(struct GBA* gba) {
  	renderThreadStop(gba);
-@@ -251,11 +259,21 @@
+@@ -278,6 +286,15 @@
  		size = 0;
  	}
  	// The full 32 MiB is mapped, so out-of-range reads can't leave the buffer.
@@ -39,16 +38,18 @@ diff --git a/src/gba.c b/src/gba.c
 +		return false;
 +	}
 +#else
- 	gba->rom = calloc(1, SIZE_ROM);
- 	if (!gba->rom) {
- 		return false;
+ #if defined(__3DS__)
+ 	// A frontend short on memory can hand over a zeroed SIZE_ROM buffer holding the game (gbaOfferRom),
+ 	// which is taken as it is instead of copied.
+@@ -295,6 +312,7 @@
+ 		}
+ 		memcpy(gba->rom, data, size);
  	}
- 	memcpy(gba->rom, data, size);
 +#endif
  	// A Classic NES Series cartridge repeats its 1 MiB all through the cartridge space; the games
  	// read it there, and drop button presses without it.
  	if (size >= 0xB0 && gba->rom[0xAC] == 'F' && !(size & (size - 1))) {
-@@ -269,6 +287,14 @@
+@@ -308,6 +326,14 @@
  	return true;
  }
  
@@ -63,9 +64,9 @@ diff --git a/src/gba.c b/src/gba.c
  // As gbaLoadRom, with the file mapped over the cartridge space instead of copied in. Returns false,
  // for gbaLoadRom to copy it, if the file can't be mapped or is one gbaLoadRom changes.
  bool gbaMapRom(struct GBA* gba, const char* path) {
-@@ -319,6 +345,7 @@
- 	gba->romMask = toPow2(size) - 1;
+@@ -384,6 +410,7 @@
  	return true;
+ #endif
  }
 +#endif
  

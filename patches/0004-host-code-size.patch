@@ -3,17 +3,16 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
 
 --- a/src/cpu/jit-internal.h
 +++ b/src/cpu/jit-internal.h
-@@ -17,7 +17,13 @@
- 	LOOKUP_BITS = 16,
+@@ -18,7 +18,11 @@
  	LOOKUP_SIZE = 1 << LOOKUP_BITS,
- 	// Within reach of every branch: AArch64's and A32's reach 128 and 32 MiB.
+ 	// Within reach of every branch: AArch64's and A32's reach 128 and 32 MiB. The 3DS has 64 MiB
+ 	// for everything on an Old 3DS, the cartridge buffer taking 32 of it.
+-#if defined(__3DS__)
 +#ifdef ARMGBA_HOST_CODE_MIB
 +	// A host with memory to spare may take more, still within that reach (armGBA-pico: 24 MiB, so a
 +	// game that compiles a lot fills it, and throws all its code away, less often).
 +	CODE_SIZE = ARMGBA_HOST_CODE_MIB << 20,
-+#else
- 	CODE_SIZE = (UINTPTR_MAX > 0xFFFFFFFFu ? 64 : 16) << 20,
-+#endif
- 	BLOCK_HASH_SIZE = 1 << 16,
- 	SITE_CACHE_SIZE = 1024,
- 	TINY_ROUTINES = 1024,
++#elif defined(__3DS__)
+ 	// The most; the 3DS takes what the heap can spare (platform/3ds/source/jitmem.c).
+ 	CODE_SIZE = 24 << 20,
+ #else
