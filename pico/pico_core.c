@@ -213,11 +213,21 @@ uint64_t pico_host_ms(void) { return (s_imp && s_imp->host_ms) ? s_imp->host_ms(
 
 /* patches/0001: gbaLoadRom takes the ROM where the LK already put it. Everything past the image is
  * zeroed, as upstream's calloc'd buffer would be (out of range reads see 0). */
+bool pico_pair_rom_is_other(const void *data);	/* pico_pair.c */
+
+/* patches/0009: the code buffer a new machine's recompiler gets. The full size, but for the
+ * netplay pair's second machine, which shares the heap with the first (pico_pair.c sets it). */
+size_t pico_code_size_next;
+size_t armgbaHostCodeSize(size_t most)
+{
+	return pico_code_size_next && pico_code_size_next < most ? pico_code_size_next : most;
+}
 uint8_t *armgbaHostRomBuffer(const void *data, size_t size)
 {
-	(void) data;
-	if (size < SIZE_ROM) memset(s_rom + size, 0, SIZE_ROM - size);
-	return s_rom;
+	/* the netplay pair's second machine loads the other console's game from its own buffer */
+	uint8_t *buf = pico_pair_rom_is_other(data) ? (uint8_t *) data : s_rom;
+	if (size < SIZE_ROM) memset(buf + size, 0, SIZE_ROM - size);
+	return buf;
 }
 
 /* patches/0005: a state load keeps the running machine aside while it puts the saved one in place.
@@ -272,15 +282,63 @@ static int core_start(unsigned romsz, const void *bios16k)
 }
 
 static void enter_bios(void) { if (s_gba) gbaReset(s_gba, false); }
-static void reset(void) { if (s_gba) { gbaReset(s_gba, true); picoLcdReset(); motion_reset(); gpioRumbleOnWrites = 0; } }
+/* reset: in a netplay pair both machines (the LK calls it on both consoles at the same frame) */
+static void reset(void)
+{
+	extern int pico_pair_on(void);
+	extern void pico_pair_reset(void);
+	if (!s_gba) return;
+	if (pico_pair_on()) pico_pair_reset();
+	else gbaReset(s_gba, true);
+	picoLcdReset(); motion_reset(); gpioRumbleOnWrites = 0;
+}
+
+/* the netplay pair (pico_pair.c): this console's machine stays s_gba, so the screen, the sound,
+ * the saves and the single machine states below are its own; the CPU loop steps both */
+void pico_pair_frame(void);
+int pico_pair_on(void);
+void pico_pair_keys(unsigned k0, unsigned k1);
+uint8_t *pico_pair_rom_ptr(void);
+int pico_pair_open(struct GBA **mine, uint8_t *my_rom, unsigned my_size, int self, unsigned other_size);
+void pico_pair_close(int self);
+unsigned pico_pair_state_size(void);
+void pico_pair_state_save(void *buf);
+int pico_pair_state_load(const void *buf, unsigned size);
+int pico_pair_load_machine(int m, const void *state);
+unsigned pico_pair_stat(unsigned what);
+struct GBA *pico_pair_machine(int m);
+static int s_pair_self;
+static unsigned char *pair_rom_ptr(void) { return pico_pair_rom_ptr(); }
+static int pair_open(int self, unsigned other_size)
+{
+	int rc;
+	s_pair_self = self ? 1 : 0;
+	rc = pico_pair_open(&s_gba, s_rom, s_rom_size, s_pair_self, other_size);
+	s_shown_frame = 0xFFFFFFFFu;	/* this console's machine is a new one */
+	picoLcdReset();
+	return rc;
+}
+static void pair_close(void) { pico_pair_close(s_pair_self); }
+/* the machine the pair runs alongside this console's, drained of its sound each frame (nobody
+ * hears it) */
+static void pair_quiet_other(void)
+{
+	struct GBA *o = pico_pair_machine(s_pair_self ^ 1);
+	if (o) o->audio.outCount = 0;
+}
 
 static void cpu_loop(void)
 {
 	for (;;) {
 		uint32_t const frame = s_gba->video.frameCounter;
-		do {
-			gbaRunPart(s_gba);
-		} while (s_gba->video.frameCounter == frame);
+		if (pico_pair_on()) {
+			pico_pair_frame();		/* both machines, machine 0's frame */
+			pair_quiet_other();
+		} else {
+			do {
+				gbaRunPart(s_gba);
+			} while (s_gba->video.frameCounter == frame);
+		}
 		s_frames++;
 		s_imp->yield_to_main();
 	}
@@ -291,6 +349,10 @@ static void pre_frame(void)
 	static const int levels[10] = { 5, 11, 18, 27, 42, 62, 84, 109, 139, 183 };   /* upstream libretro.c */
 	if (!s_gba) return;
 	videoDrawSkipped = s_skip_next_frame != 0;   /* lines 0..159 of the frame about to run */
+	/* The netplay pair: both machines take only what both consoles give them (the buttons, in
+	 * pico_pair.c). This console's keys, sensor and light would reach its own copy alone, and a
+	 * key change requests the keypad interrupt at once: the two consoles would part. */
+	if (pico_pair_on()) return;
 	gbaSetKeys(s_gba, (uint16_t) s_keys);
 	motion_frame();
 	if (s_gba->gpio.devices & HW_LIGHT_SENSOR) {
@@ -442,10 +504,41 @@ static unsigned backup_size(void) { return s_gba ? (unsigned) sizeof(s_gba->save
  * free, wherever they lie), so it can tell a full heap from one the bump pointer has merely passed */
 static unsigned heap_used(void) { return (unsigned) (pico_heap_size() - pico_heap_avail()); }
 
+/* version 6: the machine as RetroAchievements reads it, the map armGBA's libretro port announces:
+ * work RAM inside the chip and on the board, and the cartridge's save (as large as the largest
+ * until the game shows its kind, as that port sizes it) */
+static void get_memory(struct pico_core_memory *out)
+{
+	static struct pico_memdesc map[3];
+	memset(out, 0, sizeof *out);
+	if (!s_gba) return;
+	memset(map, 0, sizeof map);
+	map[0].flags = PICO_MEMDESC_SYSTEM_RAM;
+	map[0].ptr = s_gba->iwram;
+	map[0].start = 0x03000000u;
+	map[0].select = 0xFF000000u;
+	map[0].len = SIZE_IWRAM;
+	map[1].flags = PICO_MEMDESC_SYSTEM_RAM;
+	map[1].ptr = s_gba->ewram;
+	map[1].start = 0x02000000u;
+	map[1].select = 0xFF000000u;
+	map[1].len = SIZE_EWRAM;
+	map[2].flags = PICO_MEMDESC_SAVE_RAM;
+	map[2].ptr = s_gba->savedata.storage;
+	map[2].start = 0x0E000000u;
+	map[2].len = s_gba->savedata.type == SAVEDATA_AUTODETECT ? SIZE_FLASH1M : savedataSize(s_gba);
+	out->system_ram = s_gba->ewram;
+	out->system_ram_size = SIZE_EWRAM;
+	out->save_ram = s_gba->savedata.storage;
+	out->save_ram_size = (unsigned) map[2].len;
+	out->descriptors = map;
+	out->num_descriptors = 3;
+}
+
 const struct gba_core_exports *gba_core_blob_init(const struct gba_core_imports *imp)
 {
 	static const struct gba_core_exports exports = {
-		GBA_CORE_ABI_MAGIC, GBA_CORE_ABI_V4,
+		GBA_CORE_ABI_MAGIC, GBA_CORE_ABI_V6,
 		core_init, core_start, enter_bios, reset,
 		cpu_loop, pre_frame, post_frame,
 		frame_boundary_finish, cpu_ticks, set_keys,
@@ -461,6 +554,10 @@ const struct gba_core_exports *gba_core_blob_init(const struct gba_core_imports 
 		opt_count, opt_info, opt_get, opt_set,
 		heap_used,
 		motion_wanted, set_motion, motion_info, peek16, rumble,
+		pair_rom_ptr, pair_open, pair_close, pico_pair_keys,
+		pico_pair_state_size, pico_pair_state_save, pico_pair_state_load,
+		pico_pair_load_machine, pico_pair_stat,
+		get_memory,
 	};
 	s_imp = imp;
 	return &exports;

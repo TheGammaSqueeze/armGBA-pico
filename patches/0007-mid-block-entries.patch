@@ -3,7 +3,7 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
 
 --- a/src/cpu/jit.c
 +++ b/src/cpu/jit.c
-@@ -1902,6 +1902,55 @@
+@@ -1929,6 +1929,55 @@
  	return true;
  }
  
@@ -59,7 +59,7 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
  // Runs compiled code where nothing can happen inside its instructions, and the exact CPU around
  // events, DMA, IRQs and anything else compiled code leaves to it.
  void jitRunLoop(struct GBA* gba) {
-@@ -1973,6 +2022,11 @@
+@@ -2000,6 +2049,11 @@
  		}
  		struct LookupEntry* cached = &jit->lookup[lookupHash(key)];
  		void* entry = resumeHere && resumeKey == key ? resumeHere : cached->key == key ? cached->entry : NULL;
@@ -83,7 +83,7 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
  };
  
  // Whether compiled code for the block with this key starts by checking for events since the run
-@@ -467,6 +470,17 @@
+@@ -471,6 +474,17 @@
  	uint64_t flushReasons[2];
  	uint64_t exits[5];
  	uint64_t carefulSteps;

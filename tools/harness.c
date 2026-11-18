@@ -5,7 +5,7 @@
  * the MPL was not distributed with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
  * The blob is position dependent: it is mapped at the LK's core slot (0x4E400000) and given the
- * LK's arena (0x50000000, 62 MiB). Like the LK's GBA driver, a second thread runs the core's
+ * LK's arena (128 MiB, the window the LK gives this core). Like the LK's GBA driver, a second thread runs the core's
  * cpu_loop and hands over to the main thread once per frame (yield_to_main), and the main thread
  * calls pre_frame / post_frame around each hand over. This finds faults in the glue and in the
  * recompiler's interplay with it on a PC, with gdb, instead of on the device.
@@ -24,6 +24,7 @@
 #include <semaphore.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -34,7 +35,7 @@
 #define SLOT_VMA  0x4E400000u
 #define SLOT_SIZE 0x00400000u
 #define ARENA_VMA 0x50000000u
-#define ARENA_SZ  (62u << 20)
+#define ARENA_SZ  (128u << 20)	/* the LK's window for this core (ayaneo_gba_high_arena) */
 
 static const struct gba_core_exports *g;
 static sem_t s_cpu, s_main;
@@ -175,6 +176,57 @@ int main(int argc, char **argv)
 		pthread_attr_setstacksize(&a, kb * 1024u);
 		printf("cpu thread stack %zu KiB\n", kb);
 		pthread_create(&t, &a, cpu_thread, NULL);
+	}
+	{	/* HARNESS_PAIR=self (0 host, 1 guest): netplay's two machines (pico_pair.c), as one console of
+		 * the two does it. Run two harnesses at once, one each way, with the same files:
+		 *   HARNESS_PAIR_PRE   frames this console's own game runs first (its own history)
+		 *   HARNESS_PAIR_MINE  where this console's state goes, HARNESS_PAIR_THEIRS where the other's
+		 *                      comes from (waited for), HARNESS_PAIR_ROM the other's game
+		 * Then the pair runs `frames` frames with the same buttons on both, printing a hash of the
+		 * pair state at frame 0 and every 60: equal hashes on both runs mean the consoles agree. */
+		const char *ps = getenv("HARNESS_PAIR");
+		if (ps) {
+			int self = atoi(ps), pre = getenv("HARNESS_PAIR_PRE") ? atoi(getenv("HARNESS_PAIR_PRE")) : 60, i;
+			const char *mine = getenv("HARNESS_PAIR_MINE"), *theirs = getenv("HARNESS_PAIR_THEIRS");
+			size_t osz, tsz;
+			unsigned char *orom = slurp(getenv("HARNESS_PAIR_ROM"), &osz), *st = malloc(g->state_size()), *ts, *ps2;
+			FILE *f;
+			unsigned n;
+			for (i = 0; i < pre; i++)
+				run_frame();
+			g->state_save(st);
+			f = fopen(mine, "wb");
+			fwrite(st, 1, g->state_size(), f);
+			fclose(f);
+			while (access(theirs, R_OK) != 0)
+				usleep(100000);
+			usleep(300000);			/* the other run's write finished */
+			ts = slurp(theirs, &tsz);
+			if (osz > g->rom_capacity()) osz = g->rom_capacity();
+			memcpy(g->pair_rom_ptr(), orom, osz);
+			printf("pair_open: %d\n", g->pair_open(self, (unsigned) osz));
+			printf("load 0: %d, load 1: %d\n", g->pair_load_machine(0, self ? ts : st),
+			       g->pair_load_machine(1, self ? st : ts));
+			n = g->pair_state_size();
+			ps2 = malloc(n);
+			for (i = 0; i <= frames; i++) {
+				if (i % 60 == 0) {
+					unsigned h = 2166136261u, k;
+					memset(ps2, 0, n);
+					g->pair_state_save(ps2);
+					for (k = 0; k < n; k++) h = (h ^ ps2[k]) * 16777619u;
+					printf("pair frame %d hash %08x\n", i, h);
+					if (getenv("HARNESS_PAIR_DUMP") && i == atoi(getenv("HARNESS_PAIR_DUMP"))) {
+						char nm[256];
+						snprintf(nm, sizeof nm, "%s.pair%d", mine, i);
+						f = fopen(nm, "wb"); fwrite(ps2, 1, n, f); fclose(f);
+					}
+				}
+				g->pair_keys(keys_for(i), keys_for(i + 7) ^ 0x08u);
+				run_frame();
+			}
+			return 0;
+		}
 	}
 	{	/* HARNESS_RA=pf: the LK's run ahead, per committed frame: save, pf muted look ahead frames
 		 * (all but the last render skipped), load back (load_light set, as the LK does). The audio

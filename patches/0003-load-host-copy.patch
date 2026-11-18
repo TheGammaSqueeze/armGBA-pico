@@ -3,7 +3,7 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
 
 --- a/src/state.c
 +++ b/src/state.c
-@@ -270,7 +270,16 @@
+@@ -271,7 +271,16 @@
  #else
  	bool flush = codeChanged(gba, saved);
  #endif
@@ -20,7 +20,7 @@ Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
  	if (!host) {
  		return false;
  	}
-@@ -356,7 +365,9 @@
+@@ -362,7 +371,9 @@
  		}
  	}
  #endif

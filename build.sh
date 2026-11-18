@@ -55,10 +55,11 @@ CFLAGS="$ARCH -std=gnu11 ${OPT:--O3} -flto -ffunction-sections -fdata-sections -
 # armGBA's core sources (upstream CMakeLists.txt CORE_SOURCES) with the 32 bit ARM backend and
 # the NEON renderer, as upstream selects them for an "arm" processor
 CORE="bios-image.c bus.c cheats.c gba.c memory.c state.c timing.c audio/audio.c audio/psg.c
-	cart/cart.c cart/ereader.c cart/gpio.c cart/overrides.c cart/savedata.c cpu/arm.c cpu/decode.c cpu/step.c
+	cart/actionreplay.c cart/cart.c cart/ereader.c cart/fcd.c cart/gpio.c cart/overrides.c cart/savedata.c
+	cpu/arm.c cpu/decode.c cpu/step.c
 	io/dma.c io/io.c io/rfu.c io/sio.c io/timer.c video/render-thread.c video/render.c
 	video/video.c video/render-neon.c cpu/jit.c cpu/a32/backend.c"
-PICO="pico_core.c pico_lcd.c pico_libc.c"
+PICO="pico_core.c pico_lcd.c pico_libc.c pico_pair.c"
 
 OBJS=()
 for f in $CORE; do

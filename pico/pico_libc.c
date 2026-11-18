@@ -266,10 +266,13 @@ void *realloc(void *p, size_t n)
 
 void *memalign(size_t align, size_t n)
 {
-	/* only the code buffer asks; pad and remember nothing: it is never freed while the core lives */
-	uint8_t *p = malloc(n + align);
+	/* only the code buffer asks. The block malloc gave is kept just below the aligned address, so
+	 * munmap can give it back (a netplay pair builds its machines afresh: their buffers go) */
+	uint8_t *p = malloc(n + align + sizeof(void *)), *a;
 	if (!p) return NULL;
-	return (void *) (((uintptr_t) p + align - 1) & ~(uintptr_t) (align - 1));
+	a = (uint8_t *) (((uintptr_t) p + sizeof(void *) + align - 1) & ~(uintptr_t) (align - 1));
+	((void **) a)[-1] = p;
+	return a;
 }
 int posix_memalign(void **out, size_t align, size_t n)
 {
@@ -288,7 +291,12 @@ void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
 	p = memalign(4096, length);
 	return p ? p : MAP_FAILED;
 }
-int munmap(void *addr, size_t length) { (void) addr; (void) length; return 0; }
+int munmap(void *addr, size_t length)
+{
+	(void) length;
+	if (addr && addr != MAP_FAILED) free(((void **) addr)[-1]);
+	return 0;
+}
 int mprotect(void *addr, size_t len, int prot) { (void) addr; (void) len; (void) prot; return 0; }
 
 /* ---- caches ---------------------------------------------------------------------------------------- */

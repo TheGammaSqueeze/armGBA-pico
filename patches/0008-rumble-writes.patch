@@ -27,7 +27,7 @@ frontend can see them, outside struct Gpio so save states keep their layout.
  // Boktai's sensor: pin 1 resets a counter that pin 0 clocks, and pin 3 reads high once the count
 --- a/src/gba.h
 +++ b/src/gba.h
-@@ -1143,6 +1143,8 @@
+@@ -1188,6 +1188,8 @@
  // The tilt sensor, mapped into the save memory's addresses; offset is the address's low 24 bits.
  uint8_t gpioTiltRead(struct GBA*, uint32_t offset);
  void gpioTiltWrite(struct GBA*, uint32_t offset, uint8_t value);
