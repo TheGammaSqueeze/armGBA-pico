@@ -34,6 +34,7 @@
 #include <math.h>
 
 #include "gba.h"
+#include "cheats.h"
 #include "cpu/jit.h"
 #include "cpu/jit-internal.h"
 #include "gba_core_abi.h"
@@ -64,9 +65,9 @@ static volatile int s_audio_suppress;
 static int s_load_light;
 static unsigned int s_skip_next_frame;   /* the LK sets it for a frame it will not show (fast forward,
                                            * run ahead): pre_frame hands it to the renderer */
-/* armGBA 1.6 skips the drawing itself for a frame the frontend won't show (videoDrawSkipped, its own
+/* armGBA 1.6 skips the drawing itself for a frame the frontend won't show (videoSetDrawSkipped, its own
  * Fast-Forward Skip): the lines keep their per line bookkeeping and are redrawn the next frame shown.
- * It is declared in gba.h and reset by the core at each frame's end, so pre_frame sets it each time. */
+ * It is set through gba.h and reset by the core at each frame's end, so pre_frame sets it each time. */
 
 /* ---- options ---------------------------------------------------------------------------------- */
 
@@ -238,6 +239,15 @@ uint8_t *armgbaHostRomBuffer(const void *data, size_t size)
 static struct GBA *s_load_copy;
 struct GBA *armgbaHostLoadCopy(void) { return s_load_copy; }
 
+/* ---- cheats (version 7) ------------------------------------------------------------------------ */
+/* The codes the LK hands over, decoded by armGBA's own engine (src/cheats.c: GameShark, Action
+ * Replay and CodeBreaker). They run as each frame starts, after the buttons, as upstream's libretro
+ * port runs them; never in a netplay pair (pre_frame), where the other console's machine would not
+ * have them. */
+static struct CheatSet s_cheats;
+static void cheat_reset(void) { cheatsClear(&s_cheats, s_gba); }
+static int cheat_add(const char *code) { return code && cheatsAdd(&s_cheats, code) ? 0 : -1; }
+
 /* ---- the table ---------------------------------------------------------------------------------- */
 
 static int core_init(void *arena, unsigned size)
@@ -256,12 +266,16 @@ static int core_init(void *arena, unsigned size)
 	s_gba->renderer.rgb565 = true;
 	s_shown_frame = 0xFFFFFFFFu;
 	picoLcdReset();
+	cheatsInit(&s_cheats);
 	return 0;
 }
 
 static int core_start(unsigned romsz, const void *bios16k)
 {
 	if (!s_gba) return -1;
+	/* the last game's codes go, without putting back what they changed in its ROM: this one is
+	 * loaded over it */
+	cheatsClear(&s_cheats, NULL);
 	if (s_opt[OPT_BIOS] == 1 || !bios16k) {
 		if (!gbaLoadBios(s_gba, armgbaBios, SIZE_BIOS)) return -1;
 	} else if (!gbaLoadBios(s_gba, bios16k, SIZE_BIOS)) {
@@ -348,12 +362,13 @@ static void pre_frame(void)
 {
 	static const int levels[10] = { 5, 11, 18, 27, 42, 62, 84, 109, 139, 183 };   /* upstream libretro.c */
 	if (!s_gba) return;
-	videoDrawSkipped = s_skip_next_frame != 0;   /* lines 0..159 of the frame about to run */
+	videoSetDrawSkipped(s_skip_next_frame != 0);   /* lines 0..159 of the frame about to run */
 	/* The netplay pair: both machines take only what both consoles give them (the buttons, in
 	 * pico_pair.c). This console's keys, sensor and light would reach its own copy alone, and a
 	 * key change requests the keypad interrupt at once: the two consoles would part. */
 	if (pico_pair_on()) return;
 	gbaSetKeys(s_gba, (uint16_t) s_keys);
+	if (s_cheats.count || s_cheats.patchCount) cheatsApply(&s_cheats, s_gba);
 	motion_frame();
 	if (s_gba->gpio.devices & HW_LIGHT_SENSOR) {
 		int const level = s_opt[OPT_SOLAR];
@@ -538,7 +553,7 @@ static void get_memory(struct pico_core_memory *out)
 const struct gba_core_exports *gba_core_blob_init(const struct gba_core_imports *imp)
 {
 	static const struct gba_core_exports exports = {
-		GBA_CORE_ABI_MAGIC, GBA_CORE_ABI_V6,
+		GBA_CORE_ABI_MAGIC, GBA_CORE_ABI_V7,
 		core_init, core_start, enter_bios, reset,
 		cpu_loop, pre_frame, post_frame,
 		frame_boundary_finish, cpu_ticks, set_keys,
@@ -558,6 +573,7 @@ const struct gba_core_exports *gba_core_blob_init(const struct gba_core_imports 
 		pico_pair_state_size, pico_pair_state_save, pico_pair_state_load,
 		pico_pair_load_machine, pico_pair_stat,
 		get_memory,
+		cheat_reset, cheat_add,
 	};
 	s_imp = imp;
 	return &exports;

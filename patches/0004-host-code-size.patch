@@ -1,18 +1,26 @@
-armGBA-pico patch to upstream armGBA (src/cpu/jit-internal.h), MPL-2.0 like the file it changes.
+armGBA-pico patch to upstream armGBA (src/cpu/jit.c), MPL-2.0 like the file it changes.
 Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
 
---- a/src/cpu/jit-internal.h
-+++ b/src/cpu/jit-internal.h
-@@ -18,7 +18,11 @@
- 	LOOKUP_SIZE = 1 << LOOKUP_BITS,
- 	// Within reach of every branch: AArch64's and A32's reach 128 and 32 MiB. The 3DS has 64 MiB
- 	// for everything on an Old 3DS, the cartridge buffer taking 32 of it.
--#if defined(__3DS__)
-+#ifdef ARMGBA_HOST_CODE_MIB
-+	// A host with memory to spare may take more, still within that reach (armGBA-pico: 24 MiB, so a
-+	// game that compiles a lot fills it, and throws all its code away, less often).
-+	CODE_SIZE = ARMGBA_HOST_CODE_MIB << 20,
-+#elif defined(__3DS__)
- 	// The most; the 3DS takes what the heap can spare (platform/3ds/source/jitmem.c).
- 	CODE_SIZE = 24 << 20,
- #else
+Upstream sizes the code memory at an eighth of the RAM the system reports. The LK has no such
+figure: the host says how much a machine's code memory gets (armgbaHostCodeSize), the size the
+build sets (ARMGBA_HOST_CODE_MIB), or less for the netplay pair's second machine, which shares the
+heap with the first. A smaller code memory only reclaims its slots sooner.
+
+--- a/src/cpu/jit.c
++++ b/src/cpu/jit.c
+@@ -2955,7 +2955,14 @@
+ 	        (unsigned long long) jit->stepped, (unsigned long long) jit->carefulSteps, (unsigned long long) jit->exits[EXIT_EXACT]);
+ }
+ 
+-#if !defined(__3DS__)
++#if defined(ARMGBA_HOST_CODE_MIB)
++// The host says how much code memory a machine gets: it has no RAM figure to take an eighth of, and
++// for netplay a second machine shares the heap with the first, so it may get less than the most.
++extern size_t armgbaHostCodeSize(size_t most);
++static size_t codeSizeFor(void) {
++	return armgbaHostCodeSize((size_t) ARMGBA_HOST_CODE_MIB << 20);
++}
++#elif !defined(__3DS__)
+ // An eighth of the RAM the system reports, in whole MiB, from CODE_SIZE_MIN to CODE_SIZE: 16 MiB on
+ // a Miyoo Mini (128 MB, less what Linux keeps), where a game filling more could leave too little
+ // for the rest, and 32 MiB from 256 MB up. Nothing is in memory until a game fills it.

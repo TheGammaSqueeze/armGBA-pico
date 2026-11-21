@@ -356,6 +356,14 @@ int clock_gettime(clockid_t clk, struct timespec *ts)
 	ts->tv_nsec = (long) (ms % 1000u) * 1000000L;
 	return 0;
 }
+
+/* the render thread's test stall only (ARMGBA_RENDER_STALL, never set): nothing to wait for */
+int nanosleep(const struct timespec *req, struct timespec *rem)
+{
+	(void) req;
+	if (rem) rem->tv_sec = 0, rem->tv_nsec = 0;
+	return 0;
+}
 time_t time(time_t *t)
 {
 	time_t v = (time_t) pico_host_time();

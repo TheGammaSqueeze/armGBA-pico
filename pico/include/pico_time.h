@@ -9,6 +9,11 @@
 #define CLOCK_MONOTONIC 1
 #endif
 int clock_gettime(clockid_t clk, struct timespec *ts);
+int nanosleep(const struct timespec *req, struct timespec *rem);
+
+/* Upstream keeps a few renderer variables per thread (_Thread_local) for its video threads. The
+ * blob runs on one thread of the LK, which has no thread pointer to find them by: plain statics. */
+#define _Thread_local
 
 /* The recompiler publishes its code with __builtin___clear_cache. On the bare metal arm-none-eabi
  * target GCC expands that builtin to nothing (there is no operating system call for it to make), so

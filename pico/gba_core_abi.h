@@ -44,7 +44,8 @@
 #define GBA_CORE_ABI_V4      4u   /* 4: motion for tilt and gyro cartridges, and rumble */
 #define GBA_CORE_ABI_V5      5u   /* 5: two linked machines for netplay (the link cable) */
 #define GBA_CORE_ABI_V6      6u   /* 6: the machine's memory, for RetroAchievements */
-#define GBA_CORE_ABI_MAX     GBA_CORE_ABI_V6
+#define GBA_CORE_ABI_V7      7u   /* 7: cheat codes */
+#define GBA_CORE_ABI_MAX     GBA_CORE_ABI_V7
 
 #include "pico_core_memory.h"
 
@@ -168,6 +169,13 @@ struct gba_core_exports {
 	 * at 0x02000000, the cartridge's save at 0x0E000000), for RetroAchievements to read in place
 	 * between frames. Valid from core_start until the next game; a version 5 core has none. */
 	void (*get_memory)(struct pico_core_memory *out);
+
+	/* version 7: cheat codes. cheat_reset drops every code in force; cheat_add adds one cheat's
+	 * code as a RetroArch .cht file gives it (one or more codes joined by '+' or spaces), in force
+	 * from the next frame: 0 = taken, negative = a code the core cannot read (codes before it in the
+	 * same text may be in force). Between frames, from core_start until the next game. */
+	void (*cheat_reset)(void);
+	int  (*cheat_add)(const char *code);
 };
 
 /* The blob's single fixed entry symbol. The loader resolves it at a known offset (e.g.
