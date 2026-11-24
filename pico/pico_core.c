@@ -550,6 +550,10 @@ static void get_memory(struct pico_core_memory *out)
 	out->num_descriptors = 3;
 }
 
+/* The LK calls the entry at the offset the header gives, in ARM state: the entry stays ARM code
+ * when the rest is built as Thumb-2 (the header holds no Thumb bit). Everything else the LK
+ * reaches goes through the export table, whose pointers carry their own state. */
+__attribute__((target("arm")))
 const struct gba_core_exports *gba_core_blob_init(const struct gba_core_imports *imp)
 {
 	static const struct gba_core_exports exports = {

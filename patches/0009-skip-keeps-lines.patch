@@ -1,0 +1,61 @@
+armGBA-pico patch to upstream armGBA (src/video/render.c), MPL-2.0 like the file it changes.
+Copyright (c) 2026 TheGammaSqueeze. Applied by build.sh to a copy in out/src.
+
+--- a/src/video/render.c
++++ b/src/video/render.c
+@@ -2773,13 +2773,11 @@ static __attribute__((noinline, cold)) void hdLine(struct GBA* gba, int y, int s
+ 	}
+ }
+ 
+-static void oneScanlineInner(struct GBA* gba, int y) {
++// What a line drawn now finds changed since it was last drawn: the memory it reads, its registers,
++// affine coordinates and windows. The changes are taken and the line's inputs noted either way;
++// whether the line is then drawn is the caller's (armGBA-pico: a skipped line runs this too).
++static bool lineChanged(struct GBA* gba, int y, bool hdOn) {
+ 	struct Renderer* renderer = &gba->renderer;
+-	renderer->nextY = y == SCREEN_HEIGHT - 1 ? 0 : y + 1;
+-	bool const hdOn = hd.gba == gba && hd.scale > 1;
+-	if (hdOn) {
+-		hdNoteLine(renderer, y);
+-	}
+ 	uint16_t latched = renderer->dispcntLatch[0];
+ 	renderer->lineDispcnt = (renderer->dispcnt & ~0x1F80) | (renderer->dispcnt & latched & 0x1F00) | ((renderer->dispcnt | latched) & 0x0080);
+ 	if (drawing) {
+@@ -2839,6 +2837,17 @@ static void oneScanlineInner(struct GBA* gba, int y) {
+ 	}
+ 	renderer->cache[y].windowOn[0] = renderer->winN[0].on;
+ 	renderer->cache[y].windowOn[1] = renderer->winN[1].on;
++	return dirty;
++}
++
++static void oneScanlineInner(struct GBA* gba, int y) {
++	struct Renderer* renderer = &gba->renderer;
++	renderer->nextY = y == SCREEN_HEIGHT - 1 ? 0 : y + 1;
++	bool const hdOn = hd.gba == gba && hd.scale > 1;
++	if (hdOn) {
++		hdNoteLine(renderer, y);
++	}
++	bool dirty = lineChanged(gba, y, hdOn);
+ 
+ 	// One of the copies sharing the frame: by halves, the other draws this line; line by line
+ 	// (render-thread.c), whichever copy takes it, which draws it though nothing changed if its
+@@ -3198,6 +3207,19 @@ static uint16_t oneWriteRegister(struct GBA* gba, uint32_t address, uint16_t val
+ static void oneSkipScanline(struct GBA* gba, int y) {
+ 	struct Renderer* renderer = &gba->renderer;
+ 	renderer->nextY = y == SCREEN_HEIGHT - 1 ? 0 : y + 1;
++#ifdef ARMGBA_HOST_SKIP_KEEPS_LINES
++	// A line left undrawn stays dirty only when something it shows changed, as a drawn line would
++	// find: its bit then waits for the next drawn frame, and the lines that did not change are not
++	// drawn again then (armGBA-pico: fast forward and run ahead skip most frames' pictures, and
++	// the frame drawn after them redrew all 160 lines, a third more than a frame drawn each time,
++	// 3.5 against 2.35 ms in Pokemon LeafGreen). Shared frames and HD keep marking every line.
++	if (renderer->copy <= 1 && !(hd.gba == gba && hd.scale > 1)) {
++		if (lineChanged(gba, y, false) || renderer->stereoChanges) {
++			DIRTY_SCANLINE(renderer, y);
++		}
++		return;
++	}
++#endif
+ 	takeOamChanges(gba, y);
+ 	stepWindow(renderer, y);
+ 	DIRTY_SCANLINE(renderer, y);

@@ -46,17 +46,21 @@ done
 # The LK runs on CPU 0, a Cortex-A55 (MIDR 0x411fd050), an in-order core: scheduling for it
 # matters. TUNE and EXTRA_CFLAGS override for experiments.
 TUNE=${TUNE:-cortex-a55}
-ARCH="-march=armv8-a+simd -mtune=$TUNE -marm -mfpu=neon-fp-armv8 -mfloat-abi=softfp"
+# The C as Thumb-2, as upstream builds it for 32 bit ARM since 2.0: about a fifth smaller, more of
+# it stays in the in-order core's instruction cache (Pokemon LeafGreen 2.39 -> 2.35 ms a frame here).
+# The recompiler's code stays ARM, and so does the blob's entry (pico_core.c). ISA=arm to compare.
+ISA=${ISA:-thumb}
+ARCH="-march=armv8-a+simd -mtune=$TUNE -m$ISA -mfpu=neon-fp-armv8 -mfloat-abi=softfp"
 CFLAGS="$ARCH -std=gnu11 ${OPT:--O3} -fwrapv -flto -ffunction-sections -fdata-sections -fno-common \
 	${EXTRA_CFLAGS:-} -Wall -Wno-unused-parameter -Wno-unused-function \
-	-DARMGBA_HOST_ROM_BUFFER -DARMGBA_HOST_LOAD_KEEPS_CODE -DARMGBA_HOST_LOAD_COPY -DARMGBA_HOST_CODE_MIB=30 -DARMGBA_HOST_LOADS_GO_BACK -DARMGBA_HOST_IDLE_TENURE -I$ROOT/pico/include -I$ROOT/pico -I$OUT/src -I$OUT \
+	-DARMGBA_HOST_ROM_BUFFER -DARMGBA_HOST_LOAD_KEEPS_CODE -DARMGBA_HOST_LOAD_COPY -DARMGBA_HOST_CODE_MIB=30 -DARMGBA_HOST_LOADS_GO_BACK -DARMGBA_HOST_IDLE_TENURE -DARMGBA_HOST_SKIP_KEEPS_LINES -I$ROOT/pico/include -I$ROOT/pico -I$OUT/src -I$OUT \
 	-include $ROOT/pico/include/pico_time.h"
 
 # armGBA's core sources (upstream CMakeLists.txt CORE_SOURCES) with the 32 bit ARM backend and
 # the NEON renderer, as upstream selects them for an "arm" processor
 CORE="bios-image.c bus.c cheats.c gba.c memory.c state.c timing.c audio/audio.c audio/audio-thread.c audio/psg.c
 	cart/actionreplay.c cart/cart.c cart/ereader.c cart/fcd.c cart/gpio.c cart/overrides.c cart/savedata.c
-	cpu/arm.c cpu/decode.c cpu/step.c
+	cpu/arm.c cpu/decode.c cpu/step.c cpu/lean.c
 	io/dma.c io/io.c io/rfu.c io/sio.c io/timer.c video/render-thread.c video/render.c
 	video/video.c video/render-neon.c cpu/jit.c cpu/a32/backend.c"
 PICO="pico_core.c pico_lcd.c pico_libc.c pico_pair.c"
@@ -81,6 +85,10 @@ done
 $CC $CFLAGS -nostartfiles -Wl,--gc-sections -Wl,-T,"$ROOT/pico/blob.ld" -Wl,-Map,"$OUT/armgba-pico.map" \
 	-o "$OUT/armgba-pico.elf" "${OBJS[@]}" -lm -lc -lgcc
 $OBJCOPY -O binary "$OUT/armgba-pico.elf" "$OUT/armgba-pico.blob"
+# the LK calls the entry at the header's offset in ARM state: it must not be Thumb code
+if arm-none-eabi-readelf -s "$OUT/armgba-pico.elf" 2>/dev/null | awk '$8 == "gba_core_blob_init" { exit !(strtonum("0x" $2) % 2) }'; then
+	echo "!! gba_core_blob_init is Thumb code: the LK would call it in ARM state" >&2; exit 1
+fi
 
 python3 - "$OUT/armgba-pico.blob" "$VERSION" <<'EOF'
 import struct, sys, hashlib
